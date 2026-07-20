@@ -5,19 +5,19 @@
 ## バリエーション
 
 ### color-grid（100×100グリッド）
-- ソース: [color-grid.ts](../../src/sketches/color-grid.ts)
+- ソース: [color-grid.ts](../../src/sketches/grid/color-grid.ts)
 - 画像: `color-grid-100-*.png`（4枚）
 - 100×100マスのグリッドに、5〜18マスの「ブロブ」（連結した塊）を種から周囲に広げながら敷き詰めていくことでオーガニックな領域を形成。孤立した小領域（4マス以下）は隣接する最多色にマージして滑らかにしている。
 - 色は「ランダムな色相1」「色相1から80〜280度離れた色相2」「白」の3色を、ランダムな目標比率で配分。
 - マスが大きい分、輪郭のギザギザした有機的な地図/迷彩のような模様になる。
 
 ### color-grid-500（500×500グリッド）
-- ソース: [color-grid-500.ts](../../src/sketches/color-grid-500.ts)
+- ソース: [color-grid-500.ts](../../src/sketches/grid/color-grid-500.ts)
 - 画像: `color-grid-500-*.png`（5枚）
 - アルゴリズムはcolor-gridと同一（ブロブ生成＋小領域マージ）だが、グリッド解像度が500×500と高密度。同じロジックでもマスが細かくなることで、より粒状で複雑なテクスチャになる。
 
 ### color-grid-500-scatter（500×500グリッド・完全ランダム配置）
-- ソース: [color-grid-500-scatter.ts](../../src/sketches/color-grid-500-scatter.ts)
+- ソース: [color-grid-500-scatter.ts](../../src/sketches/grid/color-grid-500-scatter.ts)
 - 画像: `color-grid-500-scatter-*.png`（7枚）
 - ブロブ生成を行わず、3色を目標比率で用意した上で全マスをシャッフルして配置するだけのバリエーション。隣接性を考慮しないため、ノイズ/砂嵐のような均一に粒立った質感になる。
 
