@@ -9,6 +9,8 @@ import { colorGrid500ScatterSketch } from "./grid/color-grid-500-scatter";
 import { organicShapesSketch } from "./sample/organic-shapes";
 import { scrambleCrossingSketch } from "./crossing/scramble-crossing";
 import { verticalStripesSketch } from "./stripes/vertical-stripes";
+import { verticalStripes3Sketch } from "./stripes/vertical-stripes-3";
+import { lines04MotionRhythmSketch } from "./lines/lines-04-motion-rhythm";
 
 export const sketches: Record<string, (p: p5) => void> = {
   particles: particlesSketch,
@@ -21,6 +23,8 @@ export const sketches: Record<string, (p: p5) => void> = {
   "organic-shapes": organicShapesSketch,
   "scramble-crossing": scrambleCrossingSketch,
   "vertical-stripes": verticalStripesSketch,
+  "vertical-stripes-3": verticalStripes3Sketch,
+  "lines-04": lines04MotionRhythmSketch,
 };
 
-export const defaultSketchName = "flow-field";
+export const defaultSketchName = "lines-04";
