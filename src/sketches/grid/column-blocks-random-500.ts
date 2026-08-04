@@ -1,6 +1,6 @@
 import type p5 from "p5";
 
-export const columnBlocks500Sketch = (p: p5) => {
+export const columnBlocksRandom500Sketch = (p: p5) => {
   const size = 500;
   const gridN = 500;
   const cellSize = size / gridN;
@@ -8,18 +8,38 @@ export const columnBlocks500Sketch = (p: p5) => {
   // 1フレームで塗る列数(左から右へ1列ずつ塗り進める)
   const columnsPerFrame = 3;
 
-  // 1列を縦に等分割するセクション数
-  const sections = 5;
-  const sectionHeight = gridN / sections;
+  // 1列を縦に分割するセクション数
+  const sections = 10;
+  // どのセクションもこの高さ(セル数)は必ず確保する
+  const minSectionHeight = 15;
 
   // 同じ配色が連続する列数(=帯の幅)の範囲
   const minRun = 1;
   const maxRun = 24;
 
+  // bounds は sections + 1 個の区切り位置(先頭は0、末尾は gridN)
+  type Band = { bounds: number[]; colors: number[] };
+
   let palette: p5.Color[] = [];
-  // 列ごとの配色。上から順に各セクションの palette index を持つ
-  let columnSections: number[][] = [];
+  // 列ごとの帯情報。同じ帯に属する列は同じオブジェクトを共有する
+  let columnBands: Band[] = [];
   let drawnColumns = 0;
+
+  // 各セクションに最低高さを配り、残りをランダムな比率で分配して区切り位置を決める
+  const randomBounds = () => {
+    const slack = gridN - sections * minSectionHeight;
+    const weights = Array.from({ length: sections }, () => p.random());
+    const weightSum = weights.reduce((a, b) => a + b, 0);
+
+    const bounds = [0];
+    let y = 0;
+    for (let s = 0; s < sections - 1; s++) {
+      y += minSectionHeight + p.floor((slack * weights[s]) / weightSum);
+      bounds.push(y);
+    }
+    bounds.push(gridN);
+    return bounds;
+  };
 
   const generatePattern = () => {
     // 互いに離れた3つの色相を取り、どの2色も判別できるようにする
@@ -32,16 +52,17 @@ export const columnBlocks500Sketch = (p: p5) => {
       p.color(hue3, 72, 90),
     ];
 
-    // 幅をランダムに振った帯を左から敷き詰める。帯の中は同じ配色を共有する
-    columnSections = new Array(gridN);
+    // 幅をランダムに振った帯を左から敷き詰める。帯の中は区切り位置と配色を共有する
+    columnBands = new Array(gridN);
     let col = 0;
     while (col < gridN) {
       const width = p.floor(p.random(minRun, maxRun + 1));
-      const colors = Array.from({ length: sections }, () =>
-        p.floor(p.random(3)),
-      );
+      const band: Band = {
+        bounds: randomBounds(),
+        colors: Array.from({ length: sections }, () => p.floor(p.random(3))),
+      };
       const end = p.min(col + width, gridN);
-      for (; col < end; col++) columnSections[col] = colors;
+      for (; col < end; col++) columnBands[col] = band;
     }
 
     drawnColumns = 0;
@@ -63,14 +84,14 @@ export const columnBlocks500Sketch = (p: p5) => {
     }
 
     for (let k = 0; k < columnsPerFrame && drawnColumns < gridN; k++, drawnColumns++) {
-      const colors = columnSections[drawnColumns];
+      const { bounds, colors } = columnBands[drawnColumns];
       for (let s = 0; s < sections; s++) {
         p.fill(palette[colors[s]]);
         p.rect(
           drawnColumns * cellSize,
-          s * sectionHeight * cellSize,
+          bounds[s] * cellSize,
           cellSize,
-          sectionHeight * cellSize,
+          (bounds[s + 1] - bounds[s]) * cellSize,
         );
       }
     }
@@ -83,7 +104,7 @@ export const columnBlocks500Sketch = (p: p5) => {
 
   p.keyPressed = () => {
     if (p.key === "s" || p.key === "S") {
-      p.saveCanvas(`column-blocks-500-${Date.now()}`, "png");
+      p.saveCanvas(`column-blocks-random-500-${Date.now()}`, "png");
     }
   };
 };

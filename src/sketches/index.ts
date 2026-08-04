@@ -9,6 +9,7 @@ import { colorGrid500ScatterSketch } from "./grid/color-grid-500-scatter";
 import { columnFill500Sketch } from "./grid/column-fill-500";
 import { columnSolid500Sketch } from "./grid/column-solid-500";
 import { columnBlocks500Sketch } from "./grid/column-blocks-500";
+import { columnBlocksRandom500Sketch } from "./grid/column-blocks-random-500";
 import { organicShapesSketch } from "./sample/organic-shapes";
 import { scrambleCrossingSketch } from "./crossing/scramble-crossing";
 import { verticalStripesSketch } from "./stripes/vertical-stripes";
@@ -27,6 +28,7 @@ export const sketches: Record<string, (p: p5) => void> = {
   "column-fill-500": columnFill500Sketch,
   "column-solid-500": columnSolid500Sketch,
   "column-blocks-500": columnBlocks500Sketch,
+  "column-blocks-random-500": columnBlocksRandom500Sketch,
   "organic-shapes": organicShapesSketch,
   "scramble-crossing": scrambleCrossingSketch,
   "vertical-stripes": verticalStripesSketch,
@@ -35,4 +37,4 @@ export const sketches: Record<string, (p: p5) => void> = {
   "random-circles-packed": randomCirclesPackedSketch,
 };
 
-export const defaultSketchName = "column-blocks-500";
+export const defaultSketchName = "column-blocks-random-500";
