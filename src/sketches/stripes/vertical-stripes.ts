@@ -8,6 +8,7 @@ export const verticalStripesSketch = (p: p5) => {
   let color1: p5.Color;
   let color2: p5.Color;
   let splitRows: number[] = [];
+  let topIsColor1: boolean[] = [];
 
   const generatePattern = () => {
     const hue1 = p.random(360);
@@ -22,6 +23,9 @@ export const verticalStripesSketch = (p: p5) => {
       p.floor(p.random(splitMin, splitMax + 1)),
     );
 
+    // 列ごとに、上側がどちらの色になるかもランダムに決める
+    topIsColor1 = Array.from({ length: gridN }, () => p.random() < 0.5);
+
     render();
   };
 
@@ -29,9 +33,11 @@ export const verticalStripesSketch = (p: p5) => {
     p.noStroke();
     for (let col = 0; col < gridN; col++) {
       const split = splitRows[col];
-      p.fill(color1);
+      const topColor = topIsColor1[col] ? color1 : color2;
+      const bottomColor = topIsColor1[col] ? color2 : color1;
+      p.fill(topColor);
       p.rect(col * cellSize, 0, cellSize, split * cellSize);
-      p.fill(color2);
+      p.fill(bottomColor);
       p.rect(col * cellSize, split * cellSize, cellSize, size - split * cellSize);
     }
   };
