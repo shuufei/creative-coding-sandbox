@@ -6,6 +6,8 @@ import { bezierRibbonsSketch } from "./sample/bezier-ribbons";
 import { colorGridSketch } from "./grid/color-grid";
 import { colorGrid500Sketch } from "./grid/color-grid-500";
 import { colorGrid500ScatterSketch } from "./grid/color-grid-500-scatter";
+import { columnFill500Sketch } from "./grid/column-fill-500";
+import { columnSolid500Sketch } from "./grid/column-solid-500";
 import { organicShapesSketch } from "./sample/organic-shapes";
 import { scrambleCrossingSketch } from "./crossing/scramble-crossing";
 import { verticalStripesSketch } from "./stripes/vertical-stripes";
@@ -21,6 +23,8 @@ export const sketches: Record<string, (p: p5) => void> = {
   "color-grid": colorGridSketch,
   "color-grid-500": colorGrid500Sketch,
   "color-grid-500-scatter": colorGrid500ScatterSketch,
+  "column-fill-500": columnFill500Sketch,
+  "column-solid-500": columnSolid500Sketch,
   "organic-shapes": organicShapesSketch,
   "scramble-crossing": scrambleCrossingSketch,
   "vertical-stripes": verticalStripesSketch,
@@ -29,4 +33,4 @@ export const sketches: Record<string, (p: p5) => void> = {
   "random-circles-packed": randomCirclesPackedSketch,
 };
 
-export const defaultSketchName = "random-circles-packed";
+export const defaultSketchName = "column-solid-500";
