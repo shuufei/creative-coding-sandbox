@@ -4,8 +4,6 @@ import { flowFieldSketch } from "./sample/flow-field";
 import { gridPatternSketch } from "./grid/grid-pattern";
 import { bezierRibbonsSketch } from "./sample/bezier-ribbons";
 import { colorGridSketch } from "./grid/color-grid";
-import { colorGrid500Sketch } from "./grid/color-grid-500";
-import { colorGrid500ScatterSketch } from "./grid/color-grid-500-scatter";
 import { columnFill500Sketch } from "./grid/column-fill-500";
 import { columnSolid500Sketch } from "./grid/column-solid-500";
 import { columnBlocks500Sketch } from "./grid/column-blocks-500";
@@ -27,8 +25,6 @@ export const sketches: Record<string, (p: p5) => void> = {
   "grid-pattern": gridPatternSketch,
   "bezier-ribbons": bezierRibbonsSketch,
   "color-grid": colorGridSketch,
-  "color-grid-500": colorGrid500Sketch,
-  "color-grid-500-scatter": colorGrid500ScatterSketch,
   "column-fill-500": columnFill500Sketch,
   "column-solid-500": columnSolid500Sketch,
   "column-blocks-500": columnBlocks500Sketch,
