@@ -58,6 +58,7 @@ export const colorGridSketch = (p: p5) => {
   let gridN = 100;
   let constraintEnabled = true;
   let toneMode: ToneMode = "same";
+  let chromaCount = 2;
   let total = gridN * gridN;
   let cellsPerFrame = 100;
 
@@ -68,6 +69,7 @@ export const colorGridSketch = (p: p5) => {
 
   let constraintCheckbox: p5.Element;
   let infoDiv: p5.Element;
+  let toneRow: p5.Element;
 
   const shuffle = <T,>(arr: T[]) => {
     for (let i = arr.length - 1; i > 0; i--) {
@@ -175,7 +177,7 @@ export const colorGridSketch = (p: p5) => {
 
   // 5マス以上の連結領域(ブロブ)をランダムな形状で育てながら塗っていく
   const buildConstrainedPattern = (targetRatio: number[]) => {
-    const filledCount = [0, 0, 0];
+    const filledCount = new Array(targetRatio.length).fill(0);
 
     const unfilledList = Array.from({ length: total }, (_, i) => i);
     const positionInList = Array.from({ length: total }, (_, i) => i);
@@ -228,15 +230,14 @@ export const colorGridSketch = (p: p5) => {
 
   // マスごとに独立してランダムな色を割り当てる(連結の制約なし)
   const buildScatterPattern = (targetRatio: number[]) => {
-    const count1 = p.round(targetRatio[0] * total);
-    const count2 = p.round(targetRatio[1] * total);
-    const count3 = total - count1 - count2;
+    const counts = targetRatio.map((r) => p.round(r * total));
+    // 端数を最後の色で吸収し、合計を total にそろえる
+    const assigned = counts.slice(0, -1).reduce((a, b) => a + b, 0);
+    counts[counts.length - 1] = total - assigned;
 
-    cellColorIndex = shuffle([
-      ...Array(count1).fill(0),
-      ...Array(count2).fill(1),
-      ...Array(count3).fill(2),
-    ]);
+    cellColorIndex = shuffle(
+      counts.flatMap((count, colorIdx) => Array(count).fill(colorIdx)),
+    );
     revealOrder = shuffle(Array.from({ length: total }, (_, i) => i));
   };
 
@@ -255,15 +256,18 @@ export const colorGridSketch = (p: p5) => {
     `vertical-align:-1px;margin-right:4px;background:${color.toString("#rrggbb")}"></span>`;
 
   const updateInfo = (picks: { tone: Tone; hue: Hue }[]) => {
-    const sharedTone = picks[0].tone === picks[1].tone;
+    // トーンを1行にまとめられるのは、単色のときと2色が同トーンのとき
+    const singleToneLine =
+      picks.length === 1 || picks.every((pick) => pick.tone === picks[0].tone);
 
-    const toneLine = sharedTone
-      ? `トーン: <strong>${picks[0].tone.key}</strong> ${picks[0].tone.name}（2色共通）`
+    const toneLine = singleToneLine
+      ? `トーン: <strong>${picks[0].tone.key}</strong> ${picks[0].tone.name}` +
+        (picks.length > 1 ? "（2色共通）" : "")
       : "トーン: 色ごとに個別";
 
     const colorsHtml = picks
       .map(({ tone, hue }, i) => {
-        const tonePart = sharedTone
+        const tonePart = singleToneLine
           ? ""
           : `<strong>${tone.key}</strong> ${tone.name} / `;
         return `${swatchHtml(palette[i])}${tonePart}${hue.no}:${hue.key} ${hue.name}`;
@@ -272,8 +276,8 @@ export const colorGridSketch = (p: p5) => {
 
     infoDiv.html(
       `<div>${toneLine}</div>` +
-        `<div style="margin-top:4px">${sharedTone ? "色相" : "色"}: ` +
-        `${colorsHtml}　${swatchHtml(palette[2])}白</div>`,
+        `<div style="margin-top:4px">${singleToneLine ? "色相" : "色"}: ` +
+        `${colorsHtml}　${swatchHtml(palette[picks.length])}白</div>`,
     );
   };
 
@@ -281,34 +285,38 @@ export const colorGridSketch = (p: p5) => {
     total = gridN * gridN;
     cellsPerFrame = p.max(5, p.ceil(total / 90));
 
-    // 12トーン × 24色相 から2色を選ぶ。
+    // 12トーン × 24色相 から有彩色を選ぶ。
     // toneMode "same" は2色で同じトーンを共有し、"separate" は色ごとに別トーン。
     const toneIdx1 = p.floor(p.random(PCCS_TONES.length));
-    const toneIdx2 =
-      toneMode === "same"
-        ? toneIdx1
-        : (toneIdx1 + p.floor(p.random(1, PCCS_TONES.length))) % PCCS_TONES.length;
-    const tones = [PCCS_TONES[toneIdx1], PCCS_TONES[toneIdx2]];
-
     const hueIdx1 = p.floor(p.random(PCCS_HUES.length));
-    // 2色目は色相環上で十分に離れた位置(隣接6段階以内を避ける)から選ぶ
-    const offset = p.floor(p.random(6, PCCS_HUES.length - 5));
-    const hueIdx2 = (hueIdx1 + offset) % PCCS_HUES.length;
-    const hues = [PCCS_HUES[hueIdx1], PCCS_HUES[hueIdx2]];
+    const picks: { tone: Tone; hue: Hue }[] = [
+      { tone: PCCS_TONES[toneIdx1], hue: PCCS_HUES[hueIdx1] },
+    ];
+
+    if (chromaCount === 2) {
+      const toneIdx2 =
+        toneMode === "same"
+          ? toneIdx1
+          : (toneIdx1 + p.floor(p.random(1, PCCS_TONES.length))) % PCCS_TONES.length;
+      // 2色目は色相環上で十分に離れた位置(隣接6段階以内を避ける)から選ぶ
+      const offset = p.floor(p.random(6, PCCS_HUES.length - 5));
+      const hueIdx2 = (hueIdx1 + offset) % PCCS_HUES.length;
+      picks.push({ tone: PCCS_TONES[toneIdx2], hue: PCCS_HUES[hueIdx2] });
+    }
 
     palette = [
-      p.color(hues[0].h, tones[0].s, tones[0].b),
-      p.color(hues[1].h, tones[1].s, tones[1].b),
+      ...picks.map(({ tone, hue }) => p.color(hue.h, tone.s, tone.b)),
       p.color(0, 0, 100),
     ];
-    updateInfo([
-      { tone: tones[0], hue: hues[0] },
-      { tone: tones[1], hue: hues[1] },
-    ]);
+    updateInfo(picks);
 
-    // 3色の目標比率をランダムに決定(合計100%)
-    const cuts = shuffle([p.random(), p.random()]).sort((a, b) => a - b);
-    const targetRatio = [cuts[0], cuts[1] - cuts[0], 1 - cuts[1]];
+    // 各色の目標比率をランダムに決定(合計100%)。
+    // 区間 [0,1] を palette.length - 1 個の切れ目で分割した各幅を比率とする。
+    const cuts = Array.from({ length: palette.length - 1 }, () => p.random()).sort(
+      (a, b) => a - b,
+    );
+    const bounds = [0, ...cuts, 1];
+    const targetRatio = bounds.slice(1).map((upper, i) => upper - bounds[i]);
 
     cellColorIndex = new Array(total).fill(-1);
 
@@ -324,6 +332,13 @@ export const colorGridSketch = (p: p5) => {
     p.background(245);
 
     p.loop();
+  };
+
+  // 1色 + 白のときはトーンの組み合わせ指定が無意味なので、行を無効表示にする
+  const refreshToneRowState = () => {
+    const enabled = chromaCount === 2;
+    toneRow.style("opacity", enabled ? "1" : "0.35");
+    toneRow.style("pointer-events", enabled ? "auto" : "none");
   };
 
   // ラベル + 排他選択ボタン群を1行として作る。選択時は再生成まで行う。
@@ -368,6 +383,7 @@ export const colorGridSketch = (p: p5) => {
     }
 
     refresh();
+    return row;
   };
 
   const buildControls = () => {
@@ -393,7 +409,21 @@ export const colorGridSketch = (p: p5) => {
       },
     );
 
-    addSegmentedRow<ToneMode>(
+    addSegmentedRow(
+      controls,
+      "色数",
+      [
+        { value: 1, label: "1色 + 白" },
+        { value: 2, label: "2色 + 白" },
+      ],
+      () => chromaCount,
+      (value) => {
+        chromaCount = value;
+        refreshToneRowState();
+      },
+    );
+
+    toneRow = addSegmentedRow<ToneMode>(
       controls,
       "トーン",
       [
@@ -405,6 +435,7 @@ export const colorGridSketch = (p: p5) => {
         toneMode = value;
       },
     );
+    refreshToneRowState();
 
     const constraintRow = p.createDiv().parent(controls);
     constraintCheckbox = p

@@ -18,6 +18,7 @@ import { lines04MotionRhythmSketch } from "./lines/lines-04-motion-rhythm";
 import { randomCirclesPackedSketch } from "./circles/random-circles-packed";
 import { alignedCirclesSketch } from "./circles/aligned-circles";
 import { randomTriangleTilingSketch } from "./triangles/random-triangle-tiling";
+import { randomGeometrySketch } from "./geometry/random-geometry";
 
 export const sketches: Record<string, (p: p5) => void> = {
   particles: particlesSketch,
@@ -39,6 +40,7 @@ export const sketches: Record<string, (p: p5) => void> = {
   "random-circles-packed": randomCirclesPackedSketch,
   "random-triangle-tiling": randomTriangleTilingSketch,
   "aligned-circles": alignedCirclesSketch,
+  "random-geometry": randomGeometrySketch,
 };
 
-export const defaultSketchName = "aligned-circles";
+export const defaultSketchName = "random-geometry";
