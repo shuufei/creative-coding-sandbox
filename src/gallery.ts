@@ -7,11 +7,10 @@ import "./gallery.css";
 // 結果は sessionStorage に入れて一覧 <-> スケッチの行き来では再生成しない。
 const THUMB_MAX_PX = 640;
 const CACHE_PREFIX = "cc-thumb:";
-// 少しずつ描き進めて最後に noLoop() するスケッチがあるので、描画が止まるまで待つ。
+// 少しずつ描き進めて最後に noLoop() するスケッチがあるので、描画が止まるまで進める。
 // ずっとループするスケッチのために上限も設ける
-const MIN_FRAMES = 6;
-const MAX_FRAMES = 240;
-const MAX_WAIT_MS = 5000;
+const MAX_FRAMES = 400;
+const MAX_WAIT_MS = 6000;
 
 type Card = {
   entry: SketchEntry;
@@ -107,14 +106,19 @@ const renderThumb = async (entry: SketchEntry): Promise<string> => {
   try {
     instance = new p5(entry.sketch, stage);
 
-    // setup は同期的に走り終わっている。draw で描き足していくスケッチのために
-    // ループが止まるまで (または上限まで) フレームを進めてから撮る
+    // setup は同期的に走り終わっている。draw で描き足していくスケッチのために、
+    // 描画が止まる (noLoop) まで redraw() でフレームを進める。
+    // requestAnimationFrame 待ちだとタブの状態でフレームレートが落ちて
+    // 描き終わる前に打ち切られるので、自前で 1 フレームずつ進める
     const startedAt = performance.now();
     for (let frame = 0; frame < MAX_FRAMES; frame++) {
-      await nextFrame();
-      if (frame >= MIN_FRAMES && !isLooping(instance)) break;
+      if (!isLooping(instance)) break;
+      instance.redraw();
+      // 数フレームごとに制御を返して一覧の操作を止めないようにする
+      if (frame % 8 === 7) await nextFrame();
       if (performance.now() - startedAt > MAX_WAIT_MS) break;
     }
+    await nextFrame();
 
     const canvas = stage.querySelector("canvas");
     if (!(canvas instanceof HTMLCanvasElement)) {
