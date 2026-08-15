@@ -15,6 +15,25 @@
       canvas {
         display: block;
       }
+      /* スケッチ表示時に出す一覧への戻りリンク */
+      .back-link {
+        position: fixed;
+        left: 16px;
+        bottom: 16px;
+        z-index: 9999;
+        padding: 8px 14px;
+        border-radius: 999px;
+        border: 1px solid #ffffff26;
+        background: #000000b3;
+        color: #ededed;
+        font: 12px/1 "Helvetica Neue", Arial, sans-serif;
+        letter-spacing: 0.06em;
+        text-decoration: none;
+        backdrop-filter: blur(4px);
+      }
+      .back-link:hover {
+        border-color: #ffffff66;
+      }
     </style>
   </head>
   <body>
