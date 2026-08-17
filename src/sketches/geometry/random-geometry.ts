@@ -45,6 +45,10 @@ const KINDS: [Kind, string][] = [
 // ベタ塗りは不透明なので、後から描いた形が前の形を隠す
 type FillMode = "transparent" | "solid";
 
+// random は色相を振ったランダムな配色、gray は明度だけを変えたグレー、
+// whiteGray はそのグレーに白を足したもの
+type PaletteMode = "random" | "gray" | "whiteGray";
+
 // 色相だけを固定して持つ。彩度と明度は塗り方や形の数に合わせて render 側で決める
 type Swatch = { hue: number; sat: number; bright: number };
 
@@ -73,7 +77,12 @@ export const randomGeometrySketch = (p: p5) => {
   // ---- 設定 -------------------------------------------------------------
   let shapeCount = 10;
   let colorCount = 3;
+  let paletteMode: PaletteMode = "random";
   let fillMode: FillMode = "transparent";
+  // グレーの明度の範囲。上下を空けて、白背景にも黒に潰れる手前にも寄せない
+  const grayLow = 28;
+  const grayHigh = 88;
+  const white: Swatch = { hue: 0, sat: 0, bright: 100 };
   // 使う形。空にはできない (最後の1つはチェックを外せない)
   const enabledKinds = new Set<Kind>(KINDS.map(([kind]) => kind));
 
@@ -239,15 +248,32 @@ export const randomGeometrySketch = (p: p5) => {
   };
 
   // ---- 色 ---------------------------------------------------------------
-  const recolor = () => {
+  const randomSwatches = (): Swatch[] => {
     // 色相は円周を等分した位置から少しずらす。近すぎる2色にならない
     const offset = p.random(360);
     const step = 360 / colorCount;
-    swatches = [...Array(colorCount)].map((_, i) => ({
+    return [...Array(colorCount)].map((_, i) => ({
       hue: (offset + step * i + p.random(-step * 0.2, step * 0.2)) % 360,
       sat: p.random(58, 78),
       bright: p.random(86, 98),
     }));
+  };
+
+  // 色相を持たず明度だけを変えたグレー。
+  // 明度は範囲を等分した位置から少しずらす。近すぎる2つにならない
+  const graySwatches = (): Swatch[] => {
+    const step = (grayHigh - grayLow) / (colorCount - 1);
+    const grays = [...Array(colorCount)].map((_, i) => ({
+      hue: 0,
+      sat: 0,
+      bright: grayLow + step * i + p.random(-step * 0.15, step * 0.15),
+    }));
+
+    return paletteMode === "whiteGray" ? [white, ...grays] : grays;
+  };
+
+  const recolor = () => {
+    swatches = paletteMode === "random" ? randomSwatches() : graySwatches();
 
     assignColors();
   };
@@ -265,6 +291,16 @@ export const randomGeometrySketch = (p: p5) => {
       if (mode === "solid") return p.color(s.hue, s.sat, s.bright);
       // 乗算は重なるほど暗くなる。形が多いときは薄い色にして潰れないようにする
       const dense = shapeCount >= 50;
+      // 白は白のまま。乗算では下に何も影響しないので、形が抜けたように見える
+      if (s.bright >= 100) return p.color(0, 0, 100);
+      // グレーは下げる彩度がないので、代わりに明度の幅を上に寄せて潰れないようにする
+      if (s.sat === 0) {
+        return p.color(
+          0,
+          0,
+          p.map(s.bright, grayLow, grayHigh, dense ? 68 : 52, 97),
+        );
+      }
       return p.color(
         s.hue,
         s.sat * (dense ? 0.5 : 0.85),
@@ -459,17 +495,27 @@ export const randomGeometrySketch = (p: p5) => {
 
     addSelect<string>(
       panel,
-      "塗る色の数",
+      "塗る色",
       [
         ["ランダムな1色", "1"],
         ["ランダムな2色", "2"],
         ["ランダムな3色", "3"],
         ["ランダムな4色", "4"],
+        ["明度の異なるグレー2つ", "gray2"],
+        ["明度の異なるグレー3つ", "gray3"],
+        ["白 + 明度の異なるグレー2つ", "whiteGray2"],
+        ["白 + 明度の異なるグレー3つ", "whiteGray3"],
       ],
-      String(colorCount),
+      // グレー系は「モード名 + グレーの数」を値にしている
+      paletteMode === "random" ? String(colorCount) : `${paletteMode}${colorCount}`,
       (value) => {
         // 配置は保ったまま塗り分けだけをやり直す
-        colorCount = Number(value);
+        paletteMode = value.startsWith("whiteGray")
+          ? "whiteGray"
+          : value.startsWith("gray")
+            ? "gray"
+            : "random";
+        colorCount = Number(value.replace(/^(whiteGray|gray)/, ""));
         recolor();
         render();
       },

@@ -7,7 +7,15 @@ type SelectElement = p5.Element & {
   changed(handler: () => void): void;
 };
 
-type PaletteMode = "color2" | "color1" | "white2" | "white1";
+type PaletteMode =
+  | "color2"
+  | "color1"
+  | "white2"
+  | "white1"
+  | "gray2"
+  | "gray3"
+  | "whiteGray2"
+  | "whiteGray3";
 type ShiftMode =
   | "random"
   | "clockwise"
@@ -20,7 +28,8 @@ type BackMode = "gray" | "color";
 
 // color は前面の円、back は背後の円のパレット番号
 // 明度は手前用・背後用で別に決めるので、パレットは色相と彩度だけを持つ
-type Swatch = { hue: number; sat: number };
+// bright を持つのは明度だけを変えたグレー。それ以外は明度を前後で振り分ける
+type Swatch = { hue: number; sat: number; bright?: number };
 
 type Cell = {
   x: number;
@@ -156,10 +165,30 @@ export const alignedCirclesSketch = (p: p5) => {
   const frontBrightness = () => p.random(85, 98);
   const backBrightness = () => p.random(38, 55);
 
-  const toFront = (s: Swatch) =>
+  const toFront = (s: Swatch) => {
+    // 明度を指定されたグレーは、その明度がそのまま見せたい色になる
+    if (s.bright !== undefined) return p.color(0, 0, s.bright);
     // 白はそのまま白にする。明度を振ると白に見えなくなる
-    s.sat === 0 ? p.color(0, 0, 100) : p.color(s.hue, s.sat, frontBrightness());
-  const toBack = (s: Swatch) => p.color(s.hue, s.sat, backBrightness());
+    return s.sat === 0 ? p.color(0, 0, 100) : p.color(s.hue, s.sat, frontBrightness());
+  };
+  const toBack = (s: Swatch) =>
+    // グレーも手前より暗くする。明度の差はそのまま残るので前後を読み取れる
+    s.bright !== undefined
+      ? p.color(0, 0, s.bright * 0.55)
+      : p.color(s.hue, s.sat, backBrightness());
+
+  // 明度だけを変えたグレー。範囲を等分した位置から少しずらす。
+  // いちばん明るいものでも白い背景からは離しておく
+  const grayScale = (count: number): Swatch[] => {
+    const low = 40;
+    const high = 85;
+    const step = (high - low) / (count - 1);
+    return [...Array(count)].map((_, i) => ({
+      hue: 0,
+      sat: 0,
+      bright: low + step * i + p.random(-step * 0.15, step * 0.15),
+    }));
+  };
 
   // 2色のときは色相を離して、どちらの色か判別できるようにする
   const generateSwatches = (): Swatch[] => {
@@ -175,6 +204,14 @@ export const alignedCirclesSketch = (p: p5) => {
         return [white, pick(hue1), pick(hue2)];
       case "white1":
         return [white, pick(hue1)];
+      case "gray2":
+        return grayScale(2);
+      case "gray3":
+        return grayScale(3);
+      case "whiteGray2":
+        return [white, ...grayScale(2)];
+      case "whiteGray3":
+        return [white, ...grayScale(3)];
       default:
         return [pick(hue1), pick(hue2)];
     }
@@ -298,6 +335,10 @@ export const alignedCirclesSketch = (p: p5) => {
         ["ランダムな1色", "color1"],
         ["白 + ランダムな2色", "white2"],
         ["白 + ランダムな1色", "white1"],
+        ["明度の異なるグレー2つ", "gray2"],
+        ["明度の異なるグレー3つ", "gray3"],
+        ["白 + 明度の異なるグレー2つ", "whiteGray2"],
+        ["白 + 明度の異なるグレー3つ", "whiteGray3"],
       ],
       paletteMode,
       (value) => {

@@ -12,7 +12,14 @@ type SelectElement = p5.Element & {
 };
 
 type StrokeMode = "black" | "gray" | "none";
-type PaletteMode = "white2" | "white1" | "color2";
+type PaletteMode =
+  | "white2"
+  | "white1"
+  | "color2"
+  | "gray2"
+  | "gray3"
+  | "whiteGray2"
+  | "whiteGray3";
 type ShapeMode = "triangle" | "quad";
 
 export const randomTriangleTilingSketch = (p: p5) => {
@@ -595,9 +602,30 @@ export const randomTriangleTilingSketch = (p: p5) => {
     }
   };
 
+  // 明度だけを変えたグレー。明度は範囲を等分した位置から少しずらす。
+  // 白背景と区別できるよう、いちばん明るいものでも白からは離しておく
+  const grayPalette = (count: number): p5.Color[] => {
+    const low = 25;
+    const high = 78;
+    const step = (high - low) / (count - 1);
+    return [...Array(count)].map((_, i) =>
+      p.color(0, 0, low + step * i + p.random(-step * 0.15, step * 0.15)),
+    );
+  };
+
   // 白を混ぜる場合は、白がだいたい半分になるようにパレットへ重複して入れる
   const generatePalette = (): p5.Color[] => {
     const white = p.color(0, 0, 100);
+
+    if (paletteMode === "gray2") return grayPalette(2);
+    if (paletteMode === "gray3") return grayPalette(3);
+    if (paletteMode === "whiteGray2") {
+      return [white, white, ...grayPalette(2)];
+    }
+    if (paletteMode === "whiteGray3") {
+      return [white, white, white, ...grayPalette(3)];
+    }
+
     const hue1 = p.random(360);
     // 2色目は色相を離して、どちらの色か判別できるようにする
     const hue2 = (hue1 + p.random(90, 270)) % 360;
@@ -779,6 +807,10 @@ export const randomTriangleTilingSketch = (p: p5) => {
         ["白 + ランダムな2色", "white2"],
         ["白 + ランダムな1色", "white1"],
         ["ランダムな2色", "color2"],
+        ["明度の異なるグレー2つ", "gray2"],
+        ["明度の異なるグレー3つ", "gray3"],
+        ["白 + 明度の異なるグレー2つ", "whiteGray2"],
+        ["白 + 明度の異なるグレー3つ", "whiteGray3"],
       ],
       paletteMode,
       (value) => {
