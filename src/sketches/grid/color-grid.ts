@@ -60,14 +60,18 @@ const GRADIENT_LEVELS = 256;
 const SATURATION_LEVELS = 256;
 // 彩度の往復が何回折り返したら色相を切り替えるか
 const TURNS_PER_HUE = 2;
+// 連結グラデーションで、上端 / 下端に適用する連結マス数
+const BLOB_GRADIENT_TOP = 100;
+const BLOB_GRADIENT_BOTTOM = 1;
 
 type Tone = (typeof PCCS_TONES)[number];
 type Hue = (typeof PCCS_HUES)[number];
 type ToneMode = "same" | "separate";
 type PaletteMode = "chroma1" | "chroma2" | "gray2" | "gray3";
-type FillMode = "random" | "gradient" | "serpentine";
+type FillMode = "random" | "gradient" | "serpentine" | "blobGradient";
 type GradientDirection = "random" | "topDown";
 type HueShift = "shift" | "fixed";
+type WalkMode = "column" | "random";
 
 export const colorGridSketch = (p: p5) => {
   const size = 500;
@@ -81,6 +85,7 @@ export const colorGridSketch = (p: p5) => {
   let fillMode: FillMode = "random";
   let gradientDirection: GradientDirection = "random";
   let hueShift: HueShift = "shift";
+  let walkMode: WalkMode = "column";
   let total = gridN * gridN;
   let cellsPerFrame = 100;
 
@@ -96,6 +101,7 @@ export const colorGridSketch = (p: p5) => {
   let constraintRow: p5.Element;
   let directionRow: p5.Element;
   let hueShiftRow: p5.Element;
+  let walkRow: p5.Element;
 
   const shuffle = <T,>(arr: T[]) => {
     for (let i = arr.length - 1; i > 0; i--) {
@@ -201,8 +207,12 @@ export const colorGridSketch = (p: p5) => {
     }
   };
 
-  // 5マス以上の連結領域(ブロブ)をランダムな形状で育てながら塗っていく
-  const buildConstrainedPattern = (targetRatio: number[]) => {
+  // 連結領域(ブロブ)をランダムな形状で育てながら塗っていく。
+  // 1つあたりの目標マス数は targetSizeFor(種マスの位置) で決める。
+  const growBlobs = (
+    targetRatio: number[],
+    targetSizeFor: (seedIdx: number) => number,
+  ) => {
     const filledCount = new Array(targetRatio.length).fill(0);
 
     const unfilledList = Array.from({ length: total }, (_, i) => i);
@@ -220,7 +230,7 @@ export const colorGridSketch = (p: p5) => {
 
     while (unfilledList.length > 0) {
       const seed = unfilledList[p.floor(p.random(unfilledList.length))];
-      const targetSize = p.floor(p.random(minBlobSize, maxBlobSize + 1));
+      const targetSize = targetSizeFor(seed);
 
       const blob = [seed];
       removeFromUnfilled(seed);
@@ -250,7 +260,30 @@ export const colorGridSketch = (p: p5) => {
       blobs.push(blob);
     }
 
+    return blobs;
+  };
+
+  // 5マス以上の連結領域(ブロブ)をランダムな形状で育てながら塗っていく
+  const buildConstrainedPattern = (targetRatio: number[]) => {
+    const blobs = growBlobs(targetRatio, () =>
+      p.floor(p.random(minBlobSize, maxBlobSize + 1)),
+    );
+
     mergeSmallComponents(cellColorIndex);
+    revealOrder = ([] as number[]).concat(...blobs);
+  };
+
+  // 上端は大きな連結、下端は1マスと、行が下がるほど連結制約をゆるめていく。
+  // ブロブは種マスから上下へも広がるため境界は厳密ではなく、おおよその傾向として効く。
+  const buildBlobGradientPattern = (targetRatio: number[]) => {
+    const blobs = growBlobs(targetRatio, (seed) => {
+      const row = p.floor(seed / gridN);
+      const t = gridN > 1 ? row / (gridN - 1) : 0;
+      const size = p.lerp(BLOB_GRADIENT_TOP, BLOB_GRADIENT_BOTTOM, t);
+      // 端数を確率的に切り上げ、境目が階段状にならないようにする
+      return p.max(1, p.floor(size + p.random()));
+    });
+
     revealOrder = ([] as number[]).concat(...blobs);
   };
 
@@ -295,6 +328,13 @@ export const colorGridSketch = (p: p5) => {
   const swatchHtml = (color: p5.Color) =>
     `<span style="display:inline-block;width:12px;height:12px;border:1px solid #666;` +
     `vertical-align:-1px;margin-right:4px;background:${color.toString("#rrggbb")}"></span>`;
+
+  const appendInfoLine = (html: string) => {
+    infoDiv.elt.insertAdjacentHTML(
+      "beforeend",
+      `<div style="margin-top:4px">${html}</div>`,
+    );
+  };
 
   const updateChromaInfo = (picks: { tone: Tone; hue: Hue }[]) => {
     // トーンを1行にまとめられるのは、単色のときと2色が同トーンのとき
@@ -395,6 +435,91 @@ export const colorGridSketch = (p: p5) => {
     );
   };
 
+  // 「下 → 1マス右 → 上 → 1マス右 → 下…」と列単位で往復する経路
+  const columnWalkOrder = () => {
+    const order: number[] = [];
+    for (let col = 0; col < gridN; col++) {
+      const downward = col % 2 === 0;
+      for (let k = 0; k < gridN; k++) {
+        const row = downward ? k : gridN - 1 - k;
+        order.push(row * gridN + col);
+      }
+    }
+    return order;
+  };
+
+  // dir: 0=上 1=右 2=下 3=左。進めない場合は -1 を返す。
+  const stepFrom = (idx: number, dir: number) => {
+    const col = idx % gridN;
+    const row = p.floor(idx / gridN);
+    if (dir === 0) return row > 0 ? idx - gridN : -1;
+    if (dir === 1) return col < gridN - 1 ? idx + 1 : -1;
+    if (dir === 2) return row < gridN - 1 ? idx + gridN : -1;
+    return col > 0 ? idx - 1 : -1;
+  };
+
+  // 左上から下へ進み、行き止まる or 一定距離進んだら、未塗りの隣接マスから
+  // 進む向きをランダムに選び直す自己回避ウォーク。
+  // 「行き止まるまで直進」だけにすると未塗り領域の外周をなぞって渦巻きになるため、
+  // 直進距離にも上限を設けて上下左右に行き来させている。
+  const randomWalkOrder = () => {
+    const painted = new Uint8Array(total);
+    const order: number[] = [];
+
+    const openDirections = (from: number) => {
+      const dirs: number[] = [];
+      for (let d = 0; d < 4; d++) {
+        const candidate = stepFrom(from, d);
+        if (candidate >= 0 && !painted[candidate]) dirs.push(d);
+      }
+      return dirs;
+    };
+
+    const visit = (idx: number) => {
+      painted[idx] = 1;
+      order.push(idx);
+    };
+
+    const newRunLength = () => p.floor(p.random(3, p.max(5, gridN / 4)));
+
+    let pos = 0;
+    let dir = 2; // 最初は下向き
+    let runLeft = newRunLength();
+    visit(pos);
+
+    // 完全な行き止まりに陥ったときの再開位置(前へ進むだけなので全体で O(total))
+    let cursor = 0;
+
+    while (order.length < total) {
+      if (runLeft > 0) {
+        const ahead = stepFrom(pos, dir);
+        if (ahead >= 0 && !painted[ahead]) {
+          pos = ahead;
+          visit(pos);
+          runLeft--;
+          continue;
+        }
+      }
+
+      const options = openDirections(pos);
+      if (options.length > 0) {
+        dir = options[p.floor(p.random(options.length))];
+        pos = stepFrom(pos, dir);
+      } else {
+        // 四方すべて塗り済み。未塗りのマスまで飛んで続きから再開する
+        while (cursor < total && painted[cursor]) cursor++;
+        pos = cursor;
+        const restart = openDirections(pos);
+        if (restart.length > 0) dir = restart[p.floor(p.random(restart.length))];
+      }
+
+      visit(pos);
+      runLeft = newRunLength();
+    }
+
+    return order;
+  };
+
   // 左上を起点に「下 → 1マス右 → 上 → 1マス右 → 下…」と蛇行しながら塗り、
   // 進むたびに彩度を1段階ずつ動かす。端に達したら向きを反転して往復させ、
   // 2回折り返す(＝白 → 鮮やか → 白 を一巡する)ごとに色相を隣へ1つずらす。
@@ -412,44 +537,38 @@ export const colorGridSketch = (p: p5) => {
     let hueIdx = p.floor(p.random(PCCS_HUES.length));
     const usedHues: Hue[] = [PCCS_HUES[hueIdx]];
 
-    revealOrder = [];
+    const order = walkMode === "random" ? randomWalkOrder() : columnWalkOrder();
+
     let level = 0;
     let step = 1;
     let turns = 0;
 
-    for (let col = 0; col < gridN; col++) {
-      const downward = col % 2 === 0;
-      for (let k = 0; k < gridN; k++) {
-        const row = downward ? k : gridN - 1 - k;
-        const idx = row * gridN + col;
+    for (const idx of order) {
+      cellColorIndex[idx] = hueIdx * SATURATION_LEVELS + level;
 
-        cellColorIndex[idx] = hueIdx * SATURATION_LEVELS + level;
-        revealOrder.push(idx);
+      // 端に達したら折り返す(端の値が2マス続かないよう1つ内側へ戻す)
+      level += step;
+      if (level > SATURATION_LEVELS - 1) {
+        level = SATURATION_LEVELS - 2;
+        step = -1;
+        turns++;
+      } else if (level < 0) {
+        level = 1;
+        step = 1;
+        turns++;
+      }
 
-        // 端に達したら折り返す(端の値が2マス続かないよう1つ内側へ戻す)
-        level += step;
-        if (level > SATURATION_LEVELS - 1) {
-          level = SATURATION_LEVELS - 2;
-          step = -1;
-          turns++;
-        } else if (level < 0) {
-          level = 1;
-          step = 1;
-          turns++;
-        }
-
-        // 2回目の折り返しは彩度0(白)の位置なので、ここで色相を変えても継ぎ目が出ない
-        if (turns >= TURNS_PER_HUE) {
-          turns = 0;
-          if (hueShift === "shift") {
-            hueIdx =
-              (hueIdx + hueStep + PCCS_HUES.length) % PCCS_HUES.length;
-            usedHues.push(PCCS_HUES[hueIdx]);
-          }
+      // 2回目の折り返しは彩度0(白)の位置なので、ここで色相を変えても継ぎ目が出ない
+      if (turns >= TURNS_PER_HUE) {
+        turns = 0;
+        if (hueShift === "shift") {
+          hueIdx = (hueIdx + hueStep + PCCS_HUES.length) % PCCS_HUES.length;
+          usedHues.push(PCCS_HUES[hueIdx]);
         }
       }
     }
 
+    revealOrder = order;
     return { usedHues, hueStep };
   };
 
@@ -476,8 +595,11 @@ export const colorGridSketch = (p: p5) => {
         : "色相: 固定";
 
     infoDiv.html(
-      `<div>塗り方: 蛇行グラデーション` +
-        `（左上から 下 → 1マス右 → 上 を繰り返し）</div>` +
+      `<div>塗り方: 蛇行グラデーション（${
+        walkMode === "random"
+          ? "左上から出発し、行き止まりごとに進む向きをランダムに選択"
+          : "左上から 下 → 1マス右 → 上 を繰り返し"
+      }）</div>` +
         `<div style="margin-top:4px">彩度: 0% ⇄ 100% を1マスにつき1段階` +
         `（${SATURATION_LEVELS}段階）で往復　${hueLine}</div>` +
         `<div style="margin-top:4px">使用色相: ${hueHtml}</div>`,
@@ -489,7 +611,8 @@ export const colorGridSketch = (p: p5) => {
     cellsPerFrame = p.max(5, p.ceil(total / 90));
     cellColorIndex = new Array(total).fill(-1);
 
-    if (fillMode !== "random") {
+    // 明度/彩度で色が決まる塗り方は、配色パレットを使わず独自に色を組み立てる
+    if (fillMode === "gradient" || fillMode === "serpentine") {
       if (fillMode === "gradient") {
         buildVerticalGradientPattern();
         updateGradientInfo();
@@ -546,7 +669,13 @@ export const colorGridSketch = (p: p5) => {
     const bounds = [0, ...cuts, 1];
     const targetRatio = bounds.slice(1).map((upper, i) => upper - bounds[i]);
 
-    if (constraintEnabled) {
+    if (fillMode === "blobGradient") {
+      buildBlobGradientPattern(targetRatio);
+      appendInfoLine(
+        `塗り方: 連結グラデーション` +
+          `（上端 約${BLOB_GRADIENT_TOP}マス連結 → 下端 ${BLOB_GRADIENT_BOTTOM}マス）`,
+      );
+    } else if (constraintEnabled) {
       buildConstrainedPattern(targetRatio);
     } else {
       buildScatterPattern(targetRatio);
@@ -568,12 +697,15 @@ export const colorGridSketch = (p: p5) => {
   // グラデーション系の塗り方は明度/彩度で色が決まるため配色・トーン・連結は効かない。
   // トーンの組み合わせ指定が意味を持つのは有彩色2色のときだけ。
   const refreshRowStates = () => {
-    const randomFill = fillMode === "random";
+    // 配色パレットを使うのはランダム塗りと連結グラデーション。
+    // 連結の指定は、連結グラデーションでは塗り方自体が決めるので効かない。
+    const usesPalette = fillMode === "random" || fillMode === "blobGradient";
     setRowEnabled(directionRow, fillMode === "gradient");
+    setRowEnabled(walkRow, fillMode === "serpentine");
     setRowEnabled(hueShiftRow, fillMode === "serpentine");
-    setRowEnabled(paletteRow, randomFill);
-    setRowEnabled(toneRow, randomFill && paletteMode === "chroma2");
-    setRowEnabled(constraintRow, randomFill);
+    setRowEnabled(paletteRow, usesPalette);
+    setRowEnabled(toneRow, usesPalette && paletteMode === "chroma2");
+    setRowEnabled(constraintRow, fillMode === "random");
   };
 
   // ラベル + 排他選択ボタン群を1行として作る。選択時は再生成まで行う。
@@ -652,6 +784,7 @@ export const colorGridSketch = (p: p5) => {
         { value: "random", label: "ランダム" },
         { value: "gradient", label: "縦グラデーション" },
         { value: "serpentine", label: "蛇行グラデーション" },
+        { value: "blobGradient", label: "連結グラデーション" },
       ],
       () => fillMode,
       (value) => {
@@ -670,6 +803,19 @@ export const colorGridSketch = (p: p5) => {
       () => gradientDirection,
       (value) => {
         gradientDirection = value;
+      },
+    );
+
+    walkRow = addSegmentedRow<WalkMode>(
+      controls,
+      "経路",
+      [
+        { value: "column", label: "列を往復" },
+        { value: "random", label: "ランダム" },
+      ],
+      () => walkMode,
+      (value) => {
+        walkMode = value;
       },
     );
 
