@@ -1,7 +1,7 @@
 import type p5 from "p5";
 
 type Pt = { x: number; y: number };
-// parent は「どの図形から生えたか」。色を塊にするときに参照する
+// parent は「どの図形から生えたか」= 生成順の親
 type Face = { v: number[]; parent: number };
 
 // @types/p5 の createSelect は p5.Element を返すだけで、select 固有のメソッドがない
@@ -12,14 +12,11 @@ type SelectElement = p5.Element & {
 };
 
 type StrokeMode = "black" | "gray" | "none";
-type PaletteMode =
-  | "white2"
-  | "white1"
-  | "color2"
-  | "gray2"
-  | "gray3"
-  | "whiteGray2"
-  | "whiteGray3";
+// 下地は「塗る割合」で決まるので、パレットには塗る色だけを持たせる
+type PaletteMode = "color1" | "color2" | "gray2" | "gray3" | "shade1" | "shade2";
+type BackgroundMode = "white" | "color";
+// 塊の作り方。min = size 個以上つながるまで / exact = size 個ぴったり
+type ClusterKind = "min" | "exact";
 type ShapeMode = "triangle" | "quad";
 
 export const randomTriangleTilingSketch = (p: p5) => {
@@ -33,10 +30,18 @@ export const randomTriangleTilingSketch = (p: p5) => {
   const EPS = 1e-3;
 
   // ---- 設定 -------------------------------------------------------------
-  let strokeMode: StrokeMode = "black";
-  let paletteMode: PaletteMode = "white2";
+  let strokeMode: StrokeMode = "none";
+  let paletteMode: PaletteMode = "color2";
+  let backgroundMode: BackgroundMode = "white";
   let shapeMode: ShapeMode = "triangle";
   let faceCount = 100;
+  // 下地のまま残さずに塗る図形の割合
+  let colorRatio = 0.5;
+  // 1つの塊にまとめる図形の数。min なら下限、exact ならちょうどこの数
+  let clusterKind: ClusterKind = "min";
+  let clusterSize = 2;
+  // 中央を塗り残す図形の数。0 なら穴をあけない
+  let holeCount = 0;
 
   // 1つの図形の頂点数
   const sides = () => (shapeMode === "triangle" ? 3 : 4);
@@ -46,9 +51,10 @@ export const randomTriangleTilingSketch = (p: p5) => {
   let faces: Face[] = [];
   // 辺 -> その辺を使っている図形のインデックス。1つだけなら外周の辺
   let edgeFaces = new Map<string, number[]>();
-  // 図形ごとのパレット番号
-  let colors: number[] = [];
-  let palette: p5.Color[] = [];
+  // 図形ごとの塗り色。塗らない図形は下地と同じ色
+  let faceColors: p5.Color[] = [];
+  // 下地の色。canvas の背景にも使う
+  let bgColor!: p5.Color;
 
   const edgeKey = (a: number, b: number) => (a < b ? `${a}_${b}` : `${b}_${a}`);
   const edgeUsers = (a: number, b: number) => edgeFaces.get(edgeKey(a, b)) ?? [];
@@ -613,42 +619,194 @@ export const randomTriangleTilingSketch = (p: p5) => {
     );
   };
 
-  // 白を混ぜる場合は、白がだいたい半分になるようにパレットへ重複して入れる
-  const generatePalette = (): p5.Color[] => {
-    const white = p.color(0, 0, 100);
+  // 1つの色相で明度だけを変えた並び。
+  // 明るいほうは彩度を少し落として、明度の差だけが見えるようにする
+  const shadePalette = (hue: number, count: number): p5.Color[] => {
+    const sat = p.random(62, 85);
+    const low = 38;
+    const high = 92;
+    const step = (high - low) / (count - 1);
+    return [...Array(count)].map((_, i) =>
+      p.color(hue, sat - i * 3, low + step * i),
+    );
+  };
 
-    if (paletteMode === "gray2") return grayPalette(2);
-    if (paletteMode === "gray3") return grayPalette(3);
-    if (paletteMode === "whiteGray2") {
-      return [white, white, ...grayPalette(2)];
-    }
-    if (paletteMode === "whiteGray3") {
-      return [white, white, white, ...grayPalette(3)];
-    }
+  // 色は「グループ」の集まりとして持つ。1つの塊には1グループを割り当てるので、
+  // 明度違いの5色を1グループにすれば、塊の中だけで明度がばらつく
+  const generatePalette = (): p5.Color[][] => {
+    // 1色ずつを独立したグループにする = 塊ごとに単色
+    const solo = (list: p5.Color[]) => list.map((c) => [c]);
+
+    if (paletteMode === "gray2") return solo(grayPalette(2));
+    if (paletteMode === "gray3") return solo(grayPalette(3));
 
     const hue1 = p.random(360);
     // 2色目は色相を離して、どちらの色か判別できるようにする
     const hue2 = (hue1 + p.random(90, 270)) % 360;
-    const c1 = p.color(hue1, p.random(50, 85), p.random(60, 95));
-    const c2 = p.color(hue2, p.random(50, 85), p.random(60, 95));
 
-    if (paletteMode === "white1") return [white, c1];
-    if (paletteMode === "color2") return [c1, c2];
-    return [white, white, c1, c2];
+    if (paletteMode === "shade1") return [shadePalette(hue1, 5)];
+    if (paletteMode === "shade2") {
+      return [shadePalette(hue1, 5), shadePalette(hue2, 5)];
+    }
+
+    const c1 = p.color(hue1, p.random(50, 85), p.random(60, 95));
+    if (paletteMode === "color1") return [[c1]];
+
+    const c2 = p.color(hue2, p.random(50, 85), p.random(60, 95));
+    return [[c1], [c2]];
   };
 
-  // 生成順にたどって、半分くらいは親の色を受け継がせる = 色の塊ができる
-  const recolor = () => {
-    palette = generatePalette();
-    colors = [];
-    for (const f of faces) {
-      const inherit = f.parent >= 0 && p.random() < 0.55;
-      colors.push(inherit ? colors[f.parent] : p.floor(p.random(palette.length)));
+  // 下地。塗った色を邪魔しないよう、彩度は抑えて明るめにする
+  const generateBackground = () =>
+    backgroundMode === "white"
+      ? p.color(0, 0, 100)
+      : p.color(p.random(360), p.random(12, 40), p.random(88, 97));
+
+  // 辺を共有している図形どうしの隣接関係
+  const buildNeighbors = () => {
+    const neighbors: number[][] = faces.map(() => []);
+    for (const users of edgeFaces.values()) {
+      if (users.length !== 2) continue;
+      const [a, b] = users;
+      neighbors[a].push(b);
+      neighbors[b].push(a);
     }
+    return neighbors;
+  };
+
+  const shuffled = (items: number[]) => {
+    const list = [...items];
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = p.floor(p.random(i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
+  };
+
+  // 中央から順に holeCount 個ぶん塗り残して、穴があいたように見せる
+  const punchHole = (neighbors: number[][]) => {
+    if (holeCount === 0 || faces.length === 0) return;
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const pt of points) {
+      minX = Math.min(minX, pt.x);
+      minY = Math.min(minY, pt.y);
+      maxX = Math.max(maxX, pt.x);
+      maxY = Math.max(maxY, pt.y);
+    }
+    const center = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+
+    const centers = faces.map((f) => centroidOf(f.v));
+    const far = (i: number) => dist(centers[i], center);
+
+    let seed = 0;
+    for (let i = 1; i < faces.length; i++) {
+      if (far(i) < far(seed)) seed = i;
+    }
+
+    const hole = new Set([seed]);
+    const frontier = [...neighbors[seed]];
+    const size = Math.min(holeCount, faces.length);
+    while (hole.size < size && frontier.length > 0) {
+      // 中央に近いものから取り込むと、穴が丸くまとまる
+      let best = 0;
+      for (let i = 1; i < frontier.length; i++) {
+        if (far(frontier[i]) < far(frontier[best])) best = i;
+      }
+      const next = frontier.splice(best, 1)[0];
+      if (hole.has(next)) continue;
+      hole.add(next);
+      frontier.push(...neighbors[next]);
+    }
+
+    for (const i of hole) faceColors[i] = bgColor;
+  };
+
+  // 色を塗る図形を、隣り合った塊として選ぶ。
+  // 必要な数だけ広げられない場所は、塗らずに下地のまま残す
+  const recolor = () => {
+    const groups = generatePalette();
+    bgColor = generateBackground();
+    const neighbors = buildNeighbors();
+    const total = faces.length;
+    const target = Math.round(total * colorRatio);
+
+    // 0: 未定 / 1: 塗った / 2: 広げられず下地のまま確定
+    const state = new Uint8Array(total);
+    const group: number[] = new Array(total).fill(-1);
+
+    // seed から、まだ決まっていない図形をたどって size 個ぶん集める
+    const grow = (seed: number, size: number) => {
+      const cluster = [seed];
+      const taken = new Set([seed]);
+      const frontier = [...neighbors[seed]];
+      while (cluster.length < size && frontier.length > 0) {
+        const next = frontier.splice(p.floor(p.random(frontier.length)), 1)[0];
+        if (taken.has(next) || state[next] !== 0) continue;
+        taken.add(next);
+        cluster.push(next);
+        frontier.push(...neighbors[next]);
+      }
+      return cluster;
+    };
+
+    const exact = clusterKind === "exact";
+    let colored = 0;
+    for (const seed of shuffled([...Array(total).keys()])) {
+      if (colored >= target) break;
+      // 個数ぴったりの塊は1つが大きいので、割合を大きく超えるなら置かない
+      if (exact && colored > 0 && colored + clusterSize > target) break;
+      if (state[seed] !== 0) continue;
+      // 制約なしなら1つずつ。下限ぴったりだと塊の大きさが揃いすぎるので、
+      // それ以外は下限から少しばらつかせる
+      const size = exact
+        ? clusterSize
+        : clusterSize < 2
+          ? 1
+          : clusterSize + p.floor(p.random(clusterSize + 2));
+      const cluster = grow(seed, size);
+      // 個数指定のときは、ぴったり集まったときだけ塗る
+      if (cluster.length < (exact ? size : clusterSize)) {
+        // 周りが埋まっていて条件を満たせない = ここは下地のまま
+        for (const f of cluster) state[f] = 2;
+        continue;
+      }
+      const g = p.floor(p.random(groups.length));
+      for (const f of cluster) {
+        state[f] = 1;
+        group[f] = g;
+      }
+      colored += cluster.length;
+    }
+
+    // 10割のときは、条件を満たせず余った図形も隣の塊に吸収させて下地を残さない
+    if (colorRatio >= 1) {
+      for (let i = 0; i < total; i++) {
+        if (group[i] >= 0) continue;
+        const near = neighbors[i].find((n) => group[n] >= 0);
+        group[i] =
+          near === undefined ? p.floor(p.random(groups.length)) : group[near];
+      }
+    }
+
+    faceColors = [];
+    for (let i = 0; i < total; i++) {
+      if (group[i] < 0) {
+        faceColors.push(bgColor);
+        continue;
+      }
+      const shades = groups[group[i]];
+      faceColors.push(shades[p.floor(p.random(shades.length))]);
+    }
+
+    punchHole(neighbors);
   };
 
   const render = () => {
-    p.background(0, 0, 100);
+    p.background(bgColor);
     if (faces.length === 0) return;
 
     // 生成された形は大きさも位置も読めないので、canvas に収まるよう合わせる
@@ -680,7 +838,7 @@ export const randomTriangleTilingSketch = (p: p5) => {
     if (strokeMode === "gray") p.stroke(0, 0, 78);
 
     for (let i = 0; i < faces.length; i++) {
-      const fill = palette[colors[i]];
+      const fill = faceColors[i];
       p.fill(fill);
       // 枠なしのときは塗りと同じ色で縁取る。noStroke だと境目に隙間が見える
       if (strokeMode === "none") p.stroke(fill);
@@ -736,6 +894,8 @@ export const randomTriangleTilingSketch = (p: p5) => {
     select.changed(() => {
       const picked = options.find(([text]) => text === select.value());
       if (picked) onChange(picked[1]);
+      // フォーカスが残っているとキーボード操作が select に吸われる
+      select.elt.blur();
     });
   };
 
@@ -749,8 +909,14 @@ export const randomTriangleTilingSketch = (p: p5) => {
     button.style("border", "1px solid #444");
     button.style("border-radius", "4px");
     button.style("cursor", "pointer");
-    button.mousePressed(onClick);
+    button.mousePressed(() => {
+      onClick();
+      button.elt.blur();
+    });
   };
+
+  const savePng = () =>
+    p.saveCanvas(`random-${shapeMode}-tiling-${Date.now()}`, "png");
 
   // 形はそのままに、パレットと塗り分けだけを引き直す
   const shuffleColors = () => {
@@ -788,9 +954,9 @@ export const randomTriangleTilingSketch = (p: p5) => {
       panel,
       "枠の色",
       [
+        ["枠描画なし", "none"],
         ["黒", "black"],
         ["薄いグレー", "gray"],
-        ["枠描画なし", "none"],
       ],
       strokeMode,
       (value) => {
@@ -800,22 +966,95 @@ export const randomTriangleTilingSketch = (p: p5) => {
       },
     );
 
+    addSelect<BackgroundMode>(
+      panel,
+      "下地",
+      [
+        ["白", "white"],
+        ["ランダムな1色", "color"],
+      ],
+      backgroundMode,
+      (value) => {
+        // 下地の色は塗り分けと一緒に引き直す
+        backgroundMode = value;
+        shuffleColors();
+      },
+    );
+
     addSelect<PaletteMode>(
       panel,
       "塗る色",
       [
-        ["白 + ランダムな2色", "white2"],
-        ["白 + ランダムな1色", "white1"],
         ["ランダムな2色", "color2"],
+        ["ランダムな1色", "color1"],
+        ["ランダムな1色の明度5段", "shade1"],
+        ["ランダムな2色の明度5段", "shade2"],
         ["明度の異なるグレー2つ", "gray2"],
         ["明度の異なるグレー3つ", "gray3"],
-        ["白 + 明度の異なるグレー2つ", "whiteGray2"],
-        ["白 + 明度の異なるグレー3つ", "whiteGray3"],
       ],
       paletteMode,
       (value) => {
         // 形は保ったまま塗り分けだけをやり直す
         paletteMode = value;
+        shuffleColors();
+      },
+    );
+
+    addSelect<string>(
+      panel,
+      "塗る割合",
+      [
+        ["2割", "0.2"],
+        ["3割", "0.3"],
+        ["5割", "0.5"],
+        ["7割", "0.7"],
+        ["9割", "0.9"],
+        ["10割（下地を残さない）", "1"],
+      ],
+      String(colorRatio),
+      (value) => {
+        colorRatio = Number(value);
+        shuffleColors();
+      },
+    );
+
+    addSelect<string>(
+      panel,
+      "塗りのまとまり",
+      [
+        ["制約なし", "min:1"],
+        ["2つ以上隣接", "min:2"],
+        ["3つ以上隣接", "min:3"],
+        ["4つ以上隣接", "min:4"],
+        ["8個ずつ連結", "exact:8"],
+        ["16個ずつ連結", "exact:16"],
+        ["32個ずつ連結", "exact:32"],
+        ["64個ずつ連結", "exact:64"],
+        ["80個ずつ連結", "exact:80"],
+      ],
+      `${clusterKind}:${clusterSize}`,
+      (value) => {
+        const [kind, size] = value.split(":");
+        clusterKind = kind as ClusterKind;
+        clusterSize = Number(size);
+        shuffleColors();
+      },
+    );
+
+    addSelect<string>(
+      panel,
+      "中央の穴",
+      [
+        ["なし", "0"],
+        ["8個", "8"],
+        ["16個", "16"],
+        ["32個", "32"],
+        ["64個", "64"],
+        ["80個", "80"],
+      ],
+      String(holeCount),
+      (value) => {
+        holeCount = Number(value);
         shuffleColors();
       },
     );
@@ -836,6 +1075,7 @@ export const randomTriangleTilingSketch = (p: p5) => {
     );
 
     addButton(panel, "色を変える", shuffleColors);
+    addButton(panel, "PNG 保存", savePng);
 
     const hint = p.createDiv(
       "canvas をクリックで再生成 / c キーで色だけ変更 / s キーで PNG 保存",
@@ -870,7 +1110,7 @@ export const randomTriangleTilingSketch = (p: p5) => {
       return;
     }
     if (p.key === "s" || p.key === "S") {
-      p.saveCanvas(`random-${shapeMode}-tiling-${Date.now()}`, "png");
+      savePng();
     }
   };
 };
