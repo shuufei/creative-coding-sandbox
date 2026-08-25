@@ -6,6 +6,7 @@ import { triangleRectGrid50x25Sketch } from "./grid/triangle-rect-grid-50x25";
 import { scrambleCrossingSketch } from "./crossing/scramble-crossing";
 import { columnStripesSketch } from "./stripes/column-stripes";
 import { lines04MotionRhythmSketch } from "./lines/lines-04-motion-rhythm";
+import { lineGrid50Sketch } from "./lines/line-grid-50";
 import { randomCirclesPackedSketch } from "./circles/random-circles-packed";
 import { alignedCirclesSketch } from "./circles/aligned-circles";
 import { randomTriangleTilingSketch } from "./triangles/random-triangle-tiling";
@@ -23,6 +24,12 @@ export type SketchEntry = {
 
 // 一覧ページはこの並び順で表示する
 export const sketchList: SketchEntry[] = [
+  {
+    name: "line-grid-50",
+    title: "Line Grid 50",
+    category: "lines",
+    sketch: lineGrid50Sketch,
+  },
   {
     name: "random-geometry",
     title: "Random Geometry",

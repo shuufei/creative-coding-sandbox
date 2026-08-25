@@ -15,6 +15,8 @@ type StrokeMode = "black" | "gray" | "none";
 // 下地は「塗る割合」で決まるので、パレットには塗る色だけを持たせる
 type PaletteMode = "color1" | "color2" | "gray2" | "gray3" | "shade1" | "shade2";
 type BackgroundMode = "white" | "color";
+// fit = canvas に収める / cover = canvas を figures で埋め尽くす
+type LayoutMode = "fit" | "cover";
 // 塊の作り方。min = size 個以上つながるまで / exact = size 個ぴったり
 type ClusterKind = "min" | "exact";
 type ShapeMode = "triangle" | "quad";
@@ -42,6 +44,7 @@ export const randomTriangleTilingSketch = (p: p5) => {
   let clusterSize = 2;
   // 中央を塗り残す図形の数。0 なら穴をあけない
   let holeCount = 0;
+  let layoutMode: LayoutMode = "fit";
 
   // 1つの図形の頂点数
   const sides = () => (shapeMode === "triangle" ? 3 : 4);
@@ -683,10 +686,7 @@ export const randomTriangleTilingSketch = (p: p5) => {
     return list;
   };
 
-  // 中央から順に holeCount 個ぶん塗り残して、穴があいたように見せる
-  const punchHole = (neighbors: number[][]) => {
-    if (holeCount === 0 || faces.length === 0) return;
-
+  const modelBounds = () => {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
@@ -697,7 +697,19 @@ export const randomTriangleTilingSketch = (p: p5) => {
       maxX = Math.max(maxX, pt.x);
       maxY = Math.max(maxY, pt.y);
     }
-    const center = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+    return { minX, minY, maxX, maxY };
+  };
+
+  const modelCenter = () => {
+    const { minX, minY, maxX, maxY } = modelBounds();
+    return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  };
+
+  // 中央から順に holeCount 個ぶん塗り残して、穴があいたように見せる。
+  // canvas の中心に来る点を基準にするので、配置の設定にも追従する
+  const holeFaces = (center: Pt) => {
+    const hole = new Set<number>();
+    if (holeCount === 0 || faces.length === 0) return hole;
 
     const centers = faces.map((f) => centroidOf(f.v));
     const far = (i: number) => dist(centers[i], center);
@@ -707,7 +719,8 @@ export const randomTriangleTilingSketch = (p: p5) => {
       if (far(i) < far(seed)) seed = i;
     }
 
-    const hole = new Set([seed]);
+    const neighbors = buildNeighbors();
+    hole.add(seed);
     const frontier = [...neighbors[seed]];
     const size = Math.min(holeCount, faces.length);
     while (hole.size < size && frontier.length > 0) {
@@ -722,7 +735,7 @@ export const randomTriangleTilingSketch = (p: p5) => {
       frontier.push(...neighbors[next]);
     }
 
-    for (const i of hole) faceColors[i] = bgColor;
+    return hole;
   };
 
   // 色を塗る図形を、隣り合った塊として選ぶ。
@@ -801,31 +814,94 @@ export const randomTriangleTilingSketch = (p: p5) => {
       const shades = groups[group[i]];
       faceColors.push(shades[p.floor(p.random(shades.length))]);
     }
+  };
 
-    punchHole(neighbors);
+  const segmentDist = (pt: Pt, a: Pt, b: Pt) => {
+    const len2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+    if (len2 < EPS) return dist(pt, a);
+    const t = p.constrain(
+      ((pt.x - a.x) * (b.x - a.x) + (pt.y - a.y) * (b.y - a.y)) / len2,
+      0,
+      1,
+    );
+    return dist(pt, { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+  };
+
+  // 外周からいちばん離れた点。ここを canvas の中心に置くと、
+  // 全面を埋めるのに必要な拡大率がいちばん小さくなる = 図形が細かいまま埋まる
+  const deepestCenter = () => {
+    const edges = boundaryEdges();
+    let best = modelCenter();
+    let bestClearance = -1;
+    for (const c of [best, ...faces.map((f) => centroidOf(f.v))]) {
+      let clearance = Infinity;
+      for (const [s, e] of edges) {
+        clearance = Math.min(clearance, segmentDist(c, points[s], points[e]));
+      }
+      if (clearance > bestClearance) {
+        bestClearance = clearance;
+        best = c;
+      }
+    }
+    return best;
+  };
+
+  // canvas を埋めるのに必要な倍率。中心から全方位に線を伸ばし、
+  // 外周に届くまでの距離と、canvas の縁までの距離を比べていちばん厳しい向きに合わせる
+  const coverScale = (center: Pt) => {
+    const edges = boundaryEdges();
+    const steps = 120;
+    let scale = 0;
+    for (let i = 0; i < steps; i++) {
+      const angle = (p.TWO_PI * i) / steps;
+      const dx = Math.cos(angle);
+      const dy = Math.sin(angle);
+
+      // その向きで最初に外周と交わるまでの距離
+      let reach = Infinity;
+      for (const [s, e] of edges) {
+        const a = points[s];
+        const ex = points[e].x - a.x;
+        const ey = points[e].y - a.y;
+        const denom = dx * ey - dy * ex;
+        if (Math.abs(denom) < EPS) continue;
+        const t = ((a.x - center.x) * ey - (a.y - center.y) * ex) / denom;
+        const u = ((a.x - center.x) * dy - (a.y - center.y) * dx) / denom;
+        if (t > EPS && u >= 0 && u <= 1) reach = Math.min(reach, t);
+      }
+      if (!Number.isFinite(reach)) continue;
+
+      // canvas の中心から縁までの距離
+      const need = Math.min(
+        Math.abs(dx) < EPS ? Infinity : width / 2 / Math.abs(dx),
+        Math.abs(dy) < EPS ? Infinity : height / 2 / Math.abs(dy),
+      );
+      scale = Math.max(scale, need / reach);
+    }
+    // 外周のわずかな凹みで隙間が出ないよう、少しだけ大きくしておく
+    return (scale || 1) * 1.02;
   };
 
   const render = () => {
     p.background(bgColor);
     if (faces.length === 0) return;
 
-    // 生成された形は大きさも位置も読めないので、canvas に収まるよう合わせる
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const pt of points) {
-      minX = Math.min(minX, pt.x);
-      minY = Math.min(minY, pt.y);
-      maxX = Math.max(maxX, pt.x);
-      maxY = Math.max(maxY, pt.y);
-    }
-    const scale = Math.min(
-      (width - margin * 2) / (maxX - minX),
-      (height - margin * 2) / (maxY - minY),
-    );
-    const offsetX = (width - (maxX - minX) * scale) / 2 - minX * scale;
-    const offsetY = (height - (maxY - minY) * scale) / 2 - minY * scale;
+    // 生成された形は大きさも位置も読めないので、canvas に合わせて拡縮する
+    const { minX, minY, maxX, maxY } = modelBounds();
+    const cover = layoutMode === "cover";
+    const center = cover ? deepestCenter() : modelCenter();
+    const scale = cover
+      ? coverScale(center)
+      : Math.min(
+          (width - margin * 2) / (maxX - minX),
+          (height - margin * 2) / (maxY - minY),
+        );
+    const offsetX = cover
+      ? width / 2 - center.x * scale
+      : (width - (maxX - minX) * scale) / 2 - minX * scale;
+    const offsetY = cover
+      ? height / 2 - center.y * scale
+      : (height - (maxY - minY) * scale) / 2 - minY * scale;
     const at = (i: number) => ({
       x: points[i].x * scale + offsetX,
       y: points[i].y * scale + offsetY,
@@ -837,8 +913,10 @@ export const randomTriangleTilingSketch = (p: p5) => {
     if (strokeMode === "black") p.stroke(0, 0, 12);
     if (strokeMode === "gray") p.stroke(0, 0, 78);
 
+    const hole = holeFaces(center);
+
     for (let i = 0; i < faces.length; i++) {
-      const fill = faceColors[i];
+      const fill = hole.has(i) ? bgColor : faceColors[i];
       p.fill(fill);
       // 枠なしのときは塗りと同じ色で縁取る。noStroke だと境目に隙間が見える
       if (strokeMode === "none") p.stroke(fill);
@@ -1038,6 +1116,21 @@ export const randomTriangleTilingSketch = (p: p5) => {
         clusterKind = kind as ClusterKind;
         clusterSize = Number(size);
         shuffleColors();
+      },
+    );
+
+    addSelect<LayoutMode>(
+      panel,
+      "配置",
+      [
+        ["canvas に収める", "fit"],
+        ["canvas を埋める", "cover"],
+      ],
+      layoutMode,
+      (value) => {
+        // 拡縮の仕方が変わるだけなので、形も色もそのまま描き直す
+        layoutMode = value;
+        render();
       },
     );
 
