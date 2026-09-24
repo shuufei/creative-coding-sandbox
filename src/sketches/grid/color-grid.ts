@@ -60,6 +60,10 @@ const GRADIENT_LEVELS = 256;
 const SATURATION_LEVELS = 256;
 // 彩度の往復が何回折り返したら色相を切り替えるか
 const TURNS_PER_HUE = 2;
+// 色グラデーションで使う色数の範囲と、色相どうしの最小の離れ(24色相中の段階数)
+const COLOR_GRADIENT_STOPS_MIN = 2;
+const COLOR_GRADIENT_STOPS_MAX = 4;
+const COLOR_GRADIENT_HUE_GAP = 3;
 // 連結グラデーションで、上端 / 下端に適用する連結マス数
 const BLOB_GRADIENT_TOP = 100;
 const BLOB_GRADIENT_BOTTOM = 1;
@@ -67,11 +71,22 @@ const BLOB_GRADIENT_BOTTOM = 1;
 type Tone = (typeof PCCS_TONES)[number];
 type Hue = (typeof PCCS_HUES)[number];
 type ToneMode = "same" | "separate";
-type PaletteMode = "chroma1" | "chroma2" | "gray2" | "gray3";
-type FillMode = "random" | "gradient" | "serpentine" | "blobGradient";
+// chroma2Only は有彩色2色だけで塗り、白を含めない。
+type PaletteMode = "chroma1" | "chroma2" | "chroma2Only" | "gray2" | "gray3";
+// colorGradient は明度ではなく、ランダムに選んだ2〜4色の間を補間する縦グラデーション。
+type FillMode =
+  | "random"
+  | "gradient"
+  | "colorGradient"
+  | "serpentine"
+  | "blobGradient";
 type GradientDirection = "random" | "topDown";
 type HueShift = "shift" | "fixed";
-type WalkMode = "column" | "random";
+// 蛇行グラデーションで何を変化させるか。saturation は彩度の往復、
+// colorStops はランダムな2〜4色の間を色グラデーションと同じ補間で往復する。
+type SerpentineChange = "saturation" | "colorStops";
+// rowZigzag は2行を「下 → 右 → 上 → 右」とジグザグに進み、端で次の2行へ折り返す。
+type WalkMode = "column" | "rowZigzag" | "random";
 
 export const colorGridSketch = (p: p5) => {
   const size = 500;
@@ -85,6 +100,7 @@ export const colorGridSketch = (p: p5) => {
   let fillMode: FillMode = "random";
   let gradientDirection: GradientDirection = "random";
   let hueShift: HueShift = "shift";
+  let serpentineChange: SerpentineChange = "saturation";
   let walkMode: WalkMode = "column";
   let total = gridN * gridN;
   let cellsPerFrame = 100;
@@ -101,6 +117,7 @@ export const colorGridSketch = (p: p5) => {
   let constraintRow: p5.Element;
   let directionRow: p5.Element;
   let hueShiftRow: p5.Element;
+  let serpentineChangeRow: p5.Element;
   let walkRow: p5.Element;
 
   const shuffle = <T,>(arr: T[]) => {
@@ -134,87 +151,58 @@ export const colorGridSketch = (p: p5) => {
     return adjusted.length - 1;
   };
 
-  const findConnectedComponents = (colors: number[]) => {
-    const visited = new Array(total).fill(false);
-    const components: { cells: number[]; color: number }[] = [];
+  // 目標サイズに届かないまま袋小路で止まったブロブ(残りかす)を、
+  // 最も長く接している隣のブロブに吸収させる。色を塗る前にブロブ単位で統合するので、
+  // 塗り上がりのすべての連結領域が minSize マス以上であることが構成的に保証される。
+  const mergeUndersizedBlobs = (
+    blobs: number[][],
+    blobOf: Int32Array,
+    minSize: number,
+  ) => {
+    const undersized = blobs
+      .map((_, i) => i)
+      .filter((i) => blobs[i].length < minSize)
+      .sort((a, b) => blobs[a].length - blobs[b].length);
 
-    for (let start = 0; start < total; start++) {
-      if (visited[start]) continue;
-      const color = colors[start];
-      const cells: number[] = [];
-      const stack = [start];
-      visited[start] = true;
+    for (const i of undersized) {
+      // 先に別の残りかすを吸収して minSize に達していれば統合不要
+      if (blobs[i].length === 0 || blobs[i].length >= minSize) continue;
 
-      while (stack.length > 0) {
-        const cur = stack.pop()!;
-        cells.push(cur);
-        for (const n of neighborsOf(cur)) {
-          if (!visited[n] && colors[n] === color) {
-            visited[n] = true;
-            stack.push(n);
-          }
-        }
-      }
-
-      components.push({ cells, color });
-    }
-
-    return components;
-  };
-
-  // 4マス以下の孤立した連結領域を、隣接する中で最も多い色に塗り替える。
-  // フェーズ1: 全小領域を1パスで一括更新(高速だが、統合結果が別の判定を
-  // 狂わせて少数の新たな孤立領域を残すことがある)を繰り返して大部分を解消。
-  // フェーズ2: 残ったごく少数を、1件ずつ全体再計算しながら確実に解消する。
-  const mergeSmallComponents = (colors: number[]) => {
-    const maxSmallSize = 4;
-    const mergeOnePass = (comp: { cells: number[] }) => {
-      const ownColor = colors[comp.cells[0]];
-      const neighborTally = new Map<number, number>();
-      for (const cell of comp.cells) {
+      const contact = new Map<number, number>();
+      for (const cell of blobs[i]) {
         for (const n of neighborsOf(cell)) {
-          if (colors[n] !== ownColor) {
-            neighborTally.set(colors[n], (neighborTally.get(colors[n]) ?? 0) + 1);
-          }
+          const j = blobOf[n];
+          if (j !== i) contact.set(j, (contact.get(j) ?? 0) + 1);
         }
       }
-      if (neighborTally.size === 0) return;
+      if (contact.size === 0) continue;
 
-      let bestColor = ownColor;
-      let bestCount = -1;
-      for (const [color, count] of neighborTally) {
-        if (count > bestCount) {
-          bestCount = count;
-          bestColor = color;
+      let target = -1;
+      let bestContact = -1;
+      for (const [j, count] of contact) {
+        if (count > bestContact) {
+          bestContact = count;
+          target = j;
         }
       }
-      for (const cell of comp.cells) colors[cell] = bestColor;
-    };
-
-    const bulkPasses = 30;
-    for (let iter = 0; iter < bulkPasses; iter++) {
-      const components = findConnectedComponents(colors);
-      const smallOnes = components.filter((c) => c.cells.length <= maxSmallSize);
-      if (smallOnes.length === 0) return;
-      for (const comp of smallOnes) mergeOnePass(comp);
+      for (const cell of blobs[i]) {
+        blobOf[cell] = target;
+        blobs[target].push(cell);
+      }
+      blobs[i] = [];
     }
 
-    for (let step = 0; step < total; step++) {
-      const components = findConnectedComponents(colors);
-      const comp = components.find((c) => c.cells.length <= maxSmallSize);
-      if (!comp) break;
-      mergeOnePass(comp);
-    }
+    return blobs.filter((blob) => blob.length > 0);
   };
 
   // 連結領域(ブロブ)をランダムな形状で育てながら塗っていく。
   // 1つあたりの目標マス数は targetSizeFor(種マスの位置) で決める。
+  // minSize 未満で止まったブロブは隣のブロブに吸収させる(1 なら吸収しない)。
   const growBlobs = (
     targetRatio: number[],
     targetSizeFor: (seedIdx: number) => number,
+    minSize = 1,
   ) => {
-    const filledCount = new Array(targetRatio.length).fill(0);
-
     const unfilledList = Array.from({ length: total }, (_, i) => i);
     const positionInList = Array.from({ length: total }, (_, i) => i);
     const removeFromUnfilled = (idx: number) => {
@@ -226,14 +214,17 @@ export const colorGridSketch = (p: p5) => {
       positionInList[idx] = -1;
     };
 
-    const blobs: number[][] = [];
+    const blobOf = new Int32Array(total).fill(-1);
+    let blobs: number[][] = [];
 
     while (unfilledList.length > 0) {
       const seed = unfilledList[p.floor(p.random(unfilledList.length))];
       const targetSize = targetSizeFor(seed);
+      const id = blobs.length;
 
       const blob = [seed];
       removeFromUnfilled(seed);
+      blobOf[seed] = id;
       const frontier = new Set<number>();
       for (const n of neighborsOf(seed)) {
         if (positionInList[n] !== -1) frontier.add(n);
@@ -241,35 +232,49 @@ export const colorGridSketch = (p: p5) => {
 
       while (blob.length < targetSize && frontier.size > 0) {
         const candidates = Array.from(frontier);
-        const next = candidates[p.floor(p.random(candidates.length))];
+        // 既にブロブに含まれる隣接マスが多い候補を強く優先し、
+        // 1マス幅の糸状に伸びず、丸みのある塊として育てる。
+        const weights = candidates.map((c) => {
+          let inside = 0;
+          for (const n of neighborsOf(c)) if (blobOf[n] === id) inside++;
+          return inside ** 3;
+        });
+        const next = candidates[weightedPick(weights)];
         frontier.delete(next);
-        if (positionInList[next] === -1) continue;
 
         blob.push(next);
         removeFromUnfilled(next);
+        blobOf[next] = id;
         for (const n of neighborsOf(next)) {
           if (positionInList[n] !== -1) frontier.add(n);
         }
       }
 
+      blobs.push(blob);
+    }
+
+    if (minSize > 1) blobs = mergeUndersizedBlobs(blobs, blobOf, minSize);
+
+    const filledCount = new Array(targetRatio.length).fill(0);
+    for (const blob of blobs) {
       const deficits = targetRatio.map((r, i) => r * total - filledCount[i]);
       const colorIdx = weightedPick(deficits);
       for (const cell of blob) cellColorIndex[cell] = colorIdx;
       filledCount[colorIdx] += blob.length;
-
-      blobs.push(blob);
     }
 
     return blobs;
   };
 
-  // 5マス以上の連結領域(ブロブ)をランダムな形状で育てながら塗っていく
+  // 5マス以上の連結領域(ブロブ)をランダムな形状で育てながら塗っていく。
+  // 5マス未満で止まったブロブは隣のブロブに吸収されるため、同色領域は必ず5マス以上になる。
   const buildConstrainedPattern = (targetRatio: number[]) => {
-    const blobs = growBlobs(targetRatio, () =>
-      p.floor(p.random(minBlobSize, maxBlobSize + 1)),
+    const blobs = growBlobs(
+      targetRatio,
+      () => p.floor(p.random(minBlobSize, maxBlobSize + 1)),
+      minBlobSize,
     );
 
-    mergeSmallComponents(cellColorIndex);
     revealOrder = ([] as number[]).concat(...blobs);
   };
 
@@ -336,7 +341,10 @@ export const colorGridSketch = (p: p5) => {
     );
   };
 
-  const updateChromaInfo = (picks: { tone: Tone; hue: Hue }[]) => {
+  const updateChromaInfo = (
+    picks: { tone: Tone; hue: Hue }[],
+    includeWhite: boolean,
+  ) => {
     // トーンを1行にまとめられるのは、単色のときと2色が同トーンのとき
     const singleToneLine =
       picks.length === 1 || picks.every((pick) => pick.tone === picks[0].tone);
@@ -358,7 +366,9 @@ export const colorGridSketch = (p: p5) => {
     infoDiv.html(
       `<div>${toneLine}</div>` +
         `<div style="margin-top:4px">${singleToneLine ? "色相" : "色"}: ` +
-        `${colorsHtml}　${swatchHtml(palette[picks.length])}白</div>`,
+        colorsHtml +
+        (includeWhite ? `　${swatchHtml(palette[picks.length])}白` : "") +
+        `</div>`,
     );
   };
 
@@ -383,14 +393,10 @@ export const colorGridSketch = (p: p5) => {
     return { lower: p.min(GRADIENT_RUN_MIN, upper), upper };
   };
 
-  // 列ごとに黒→白の縦グラデーションを作る。向きは設定に応じて上から下に統一するか
-  // 列単位でランダムに反転させる。両端(最も黒い領域と最も白い領域)は
-  // 数マス分を同じ明度でベタ塗りする。
-  const buildVerticalGradientPattern = () => {
-    palette = Array.from({ length: GRADIENT_LEVELS }, (_, i) =>
-      p.color(0, 0, (i / (GRADIENT_LEVELS - 1)) * 100),
-    );
-
+  // 列ごとに palette の先頭 → 末尾へ向かう縦グラデーションを敷く。向きは設定に応じて
+  // 上から下に統一するか列単位でランダムに反転させる。両端は数マス分を同じ色でベタ塗りする。
+  // palette は GRADIENT_LEVELS 段階で呼び出し側が用意する。
+  const layoutVerticalGradient = () => {
     const { lower, upper } = gradientRunRange();
 
     for (let col = 0; col < gridN; col++) {
@@ -417,21 +423,118 @@ export const colorGridSketch = (p: p5) => {
     revealOrder = shuffle(Array.from({ length: total }, (_, i) => i));
   };
 
-  const updateGradientInfo = () => {
+  // 黒 → 白の明度グラデーション
+  const buildVerticalGradientPattern = () => {
+    palette = Array.from({ length: GRADIENT_LEVELS }, (_, i) =>
+      p.color(0, 0, (i / (GRADIENT_LEVELS - 1)) * 100),
+    );
+    layoutVerticalGradient();
+  };
+
+  // 色グラデーションの中継色をランダムに 2〜4 色選ぶ。色相は互いに離れたものにし、
+  // トーンは toneMode に応じて全色共通か色ごとに個別にする。
+  const pickGradientStops = () => {
+    const count = p.floor(
+      p.random(COLOR_GRADIENT_STOPS_MIN, COLOR_GRADIENT_STOPS_MAX + 1),
+    );
+    const hueCount = PCCS_HUES.length;
+    const hueDistance = (a: number, b: number) => {
+      const d = p.abs(a - b) % hueCount;
+      return p.min(d, hueCount - d);
+    };
+
+    const hueIdxs: number[] = [];
+    for (let tries = 0; hueIdxs.length < count && tries < 1000; tries++) {
+      const candidate = p.floor(p.random(hueCount));
+      if (hueIdxs.every((h) => hueDistance(h, candidate) >= COLOR_GRADIENT_HUE_GAP)) {
+        hueIdxs.push(candidate);
+      }
+    }
+
+    const sharedTone = PCCS_TONES[p.floor(p.random(PCCS_TONES.length))];
+    return hueIdxs.map((hueIdx) => ({
+      tone:
+        toneMode === "same"
+          ? sharedTone
+          : PCCS_TONES[p.floor(p.random(PCCS_TONES.length))],
+      hue: PCCS_HUES[hueIdx],
+    }));
+  };
+
+  // 中継色の並びを等間隔に置き、隣り合う中継色の間を HSB で補間する。
+  // 色相は色相環上の近い側を通る。
+  const interpolateStops = (stops: { tone: Tone; hue: Hue }[], t: number) => {
+    const segments = stops.length - 1;
+    const pos = t * segments;
+    const i = p.min(p.floor(pos), segments - 1);
+    const f = pos - i;
+    const from = stops[i];
+    const to = stops[i + 1];
+    const hueDelta = ((to.hue.h - from.hue.h + 540) % 360) - 180;
+    return p.color(
+      (from.hue.h + hueDelta * f + 360) % 360,
+      p.lerp(from.tone.s, to.tone.s, f),
+      p.lerp(from.tone.b, to.tone.b, f),
+    );
+  };
+
+  // ランダムな 2〜4 色の間を補間する色グラデーション
+  const buildColorGradientPattern = () => {
+    const stops = pickGradientStops();
+    palette = Array.from({ length: GRADIENT_LEVELS }, (_, i) =>
+      interpolateStops(stops, i / (GRADIENT_LEVELS - 1)),
+    );
+    layoutVerticalGradient();
+    return stops;
+  };
+
+  const gradientRunHtml = () => {
     const { lower, upper } = gradientRunRange();
+    return (
+      `<div style="margin-top:4px">両端のベタ塗り: ` +
+      `<strong>${lower}〜${upper}</strong> マス連結` +
+      (upper < GRADIENT_RUN_MAX
+        ? `（グリッド数 ${gridN} に合わせて上限を縮小）`
+        : "") +
+      `　階調: ${GRADIENT_LEVELS}</div>`
+    );
+  };
+
+  const directionLabel = () =>
+    gradientDirection === "topDown"
+      ? "全列とも上から下"
+      : "向きは列ごとにランダム反転";
+
+  const updateGradientInfo = () => {
     infoDiv.html(
-      `<div>塗り方: 縦グラデーション（黒 → 白 / ` +
-        `${
-          gradientDirection === "topDown"
-            ? "全列とも上から下"
-            : "向きは列ごとにランダム反転"
-        }）</div>` +
-        `<div style="margin-top:4px">両端のベタ塗り: ` +
-        `<strong>${lower}〜${upper}</strong> マス連結` +
-        (upper < GRADIENT_RUN_MAX
-          ? `（グリッド数 ${gridN} に合わせて上限を縮小）`
-          : "") +
-        `　階調: ${GRADIENT_LEVELS}</div>`,
+      `<div>塗り方: 縦グラデーション（黒 → 白 / ${directionLabel()}）</div>` +
+        gradientRunHtml(),
+    );
+  };
+
+  // 中継色の一覧(トーン行 + 色の並び)を表示用 HTML にする
+  const gradientStopsHtml = (stops: { tone: Tone; hue: Hue }[]) => {
+    const singleTone = stops.every((stop) => stop.tone === stops[0].tone);
+    const toneLine = singleTone
+      ? `トーン: <strong>${stops[0].tone.key}</strong> ${stops[0].tone.name}（全色共通）`
+      : "トーン: 色ごとに個別";
+    const stopsHtml = stops
+      .map(({ tone, hue }) => {
+        const tonePart = singleTone ? "" : `<strong>${tone.key}</strong> ${tone.name} / `;
+        return (
+          `${swatchHtml(p.color(hue.h, tone.s, tone.b))}` +
+          `${tonePart}${hue.no}:${hue.key} ${hue.name}`
+        );
+      })
+      .join(" → ");
+    return `${toneLine}</div><div style="margin-top:4px">色: ${stopsHtml}`;
+  };
+
+  const updateColorGradientInfo = (stops: { tone: Tone; hue: Hue }[]) => {
+    infoDiv.html(
+      `<div>塗り方: 色グラデーション（${stops.length}色 / ${directionLabel()}）</div>` +
+        `<div style="margin-top:4px">${gradientStopsHtml(stops)}</div>` +
+        gradientRunHtml(),
     );
   };
 
@@ -521,6 +624,69 @@ export const colorGridSketch = (p: p5) => {
   };
 
   // 左上を起点に「下 → 1マス右 → 上 → 1マス右 → 下…」と蛇行しながら塗り、
+  // 2行を1組として「下 → 1マス右 → 上 → 1マス右 → 下…」とジグザグに横へ進み、
+  // 端まで来たら下の2行へ移って逆向き(右 → 左)に同じジグザグで戻る経路。
+  // 左上から出発する。グリッド数が奇数のときは最後の1行だけ横に進む。
+  const rowZigzagWalkOrder = () => {
+    const order: number[] = [];
+    for (let band = 0; band * 2 < gridN; band++) {
+      const top = band * 2;
+      const bottom = p.min(top + 1, gridN - 1);
+      const rightward = band % 2 === 0;
+      for (let k = 0; k < gridN; k++) {
+        const col = rightward ? k : gridN - 1 - k;
+        // 偶数番目の列は上から下へ、奇数番目は下から上へ通る
+        const rows =
+          bottom === top ? [top] : k % 2 === 0 ? [top, bottom] : [bottom, top];
+        for (const row of rows) order.push(row * gridN + col);
+      }
+    }
+    return order;
+  };
+
+  const walkOrderFor = (mode: WalkMode) => {
+    if (mode === "random") return randomWalkOrder();
+    if (mode === "rowZigzag") return rowZigzagWalkOrder();
+    return columnWalkOrder();
+  };
+
+  // 経路に沿って 0 → levels-1 → 0 … と1マスにつき1段階ずつ往復する値を各マスに渡す。
+  // 端に達したら折り返す(端の値が2マス続かないよう1つ内側へ戻す)。
+  // paint の turned は、そのマスを塗った直後に折り返したときだけ true。
+  const walkPingPong = (
+    levels: number,
+    paint: (idx: number, level: number, turned: boolean) => void,
+  ) => {
+    const order = walkOrderFor(walkMode);
+    let level = 0;
+    let step = 1;
+
+    for (const idx of order) {
+      const current = level;
+      let turned = false;
+      level += step;
+      if (level > levels - 1) {
+        level = levels - 2;
+        step = -1;
+        turned = true;
+      } else if (level < 0) {
+        level = 1;
+        step = 1;
+        turned = true;
+      }
+      paint(idx, current, turned);
+    }
+
+    revealOrder = order;
+  };
+
+  const walkLabel = () =>
+    walkMode === "random"
+      ? "左上から出発し、行き止まりごとに進む向きをランダムに選択"
+      : walkMode === "rowZigzag"
+        ? "左上から 下 → 右 → 上 → 右 と2行をジグザグに進み、端で次の2行へ折り返し"
+        : "左上から 下 → 1マス右 → 上 を繰り返し";
+
   // 進むたびに彩度を1段階ずつ動かす。端に達したら向きを反転して往復させ、
   // 2回折り返す(＝白 → 鮮やか → 白 を一巡する)ごとに色相を隣へ1つずらす。
   const buildSerpentinePattern = () => {
@@ -537,28 +703,12 @@ export const colorGridSketch = (p: p5) => {
     let hueIdx = p.floor(p.random(PCCS_HUES.length));
     const usedHues: Hue[] = [PCCS_HUES[hueIdx]];
 
-    const order = walkMode === "random" ? randomWalkOrder() : columnWalkOrder();
-
-    let level = 0;
-    let step = 1;
     let turns = 0;
-
-    for (const idx of order) {
+    walkPingPong(SATURATION_LEVELS, (idx, level, turned) => {
       cellColorIndex[idx] = hueIdx * SATURATION_LEVELS + level;
-
-      // 端に達したら折り返す(端の値が2マス続かないよう1つ内側へ戻す)
-      level += step;
-      if (level > SATURATION_LEVELS - 1) {
-        level = SATURATION_LEVELS - 2;
-        step = -1;
-        turns++;
-      } else if (level < 0) {
-        level = 1;
-        step = 1;
-        turns++;
-      }
-
+      if (!turned) return;
       // 2回目の折り返しは彩度0(白)の位置なので、ここで色相を変えても継ぎ目が出ない
+      turns++;
       if (turns >= TURNS_PER_HUE) {
         turns = 0;
         if (hueShift === "shift") {
@@ -566,10 +716,22 @@ export const colorGridSketch = (p: p5) => {
           usedHues.push(PCCS_HUES[hueIdx]);
         }
       }
-    }
+    });
 
-    revealOrder = order;
     return { usedHues, hueStep };
+  };
+
+  // 蛇行の色グラデーション。ランダムな 2〜4 色の間を 1マスにつき1段階で進み、
+  // 端の色に達したら折り返して往復する。
+  const buildSerpentineColorPattern = () => {
+    const stops = pickGradientStops();
+    palette = Array.from({ length: GRADIENT_LEVELS }, (_, i) =>
+      interpolateStops(stops, i / (GRADIENT_LEVELS - 1)),
+    );
+    walkPingPong(GRADIENT_LEVELS, (idx, level) => {
+      cellColorIndex[idx] = level;
+    });
+    return stops;
   };
 
   const updateSerpentineInfo = ({
@@ -595,14 +757,19 @@ export const colorGridSketch = (p: p5) => {
         : "色相: 固定";
 
     infoDiv.html(
-      `<div>塗り方: 蛇行グラデーション（${
-        walkMode === "random"
-          ? "左上から出発し、行き止まりごとに進む向きをランダムに選択"
-          : "左上から 下 → 1マス右 → 上 を繰り返し"
-      }）</div>` +
+      `<div>塗り方: 蛇行グラデーション（${walkLabel()}）</div>` +
         `<div style="margin-top:4px">彩度: 0% ⇄ 100% を1マスにつき1段階` +
         `（${SATURATION_LEVELS}段階）で往復　${hueLine}</div>` +
         `<div style="margin-top:4px">使用色相: ${hueHtml}</div>`,
+    );
+  };
+
+  const updateSerpentineColorInfo = (stops: { tone: Tone; hue: Hue }[]) => {
+    infoDiv.html(
+      `<div>塗り方: 蛇行グラデーション（${walkLabel()}）</div>` +
+        `<div style="margin-top:4px">変化: ${stops.length}色の色グラデーションを` +
+        `1マスにつき1段階（${GRADIENT_LEVELS}段階）で往復</div>` +
+        `<div style="margin-top:4px">${gradientStopsHtml(stops)}</div>`,
     );
   };
 
@@ -612,10 +779,18 @@ export const colorGridSketch = (p: p5) => {
     cellColorIndex = new Array(total).fill(-1);
 
     // 明度/彩度で色が決まる塗り方は、配色パレットを使わず独自に色を組み立てる
-    if (fillMode === "gradient" || fillMode === "serpentine") {
+    if (
+      fillMode === "gradient" ||
+      fillMode === "colorGradient" ||
+      fillMode === "serpentine"
+    ) {
       if (fillMode === "gradient") {
         buildVerticalGradientPattern();
         updateGradientInfo();
+      } else if (fillMode === "colorGradient") {
+        updateColorGradientInfo(buildColorGradientPattern());
+      } else if (serpentineChange === "colorStops") {
+        updateSerpentineColorInfo(buildSerpentineColorPattern());
       } else {
         updateSerpentineInfo(buildSerpentinePattern());
       }
@@ -643,7 +818,8 @@ export const colorGridSketch = (p: p5) => {
         { tone: PCCS_TONES[toneIdx1], hue: PCCS_HUES[hueIdx1] },
       ];
 
-      if (paletteMode === "chroma2") {
+      const twoChroma = paletteMode === "chroma2" || paletteMode === "chroma2Only";
+      if (twoChroma) {
         const toneIdx2 =
           toneMode === "same"
             ? toneIdx1
@@ -654,11 +830,10 @@ export const colorGridSketch = (p: p5) => {
         picks.push({ tone: PCCS_TONES[toneIdx2], hue: PCCS_HUES[hueIdx2] });
       }
 
-      palette = [
-        ...picks.map(({ tone, hue }) => p.color(hue.h, tone.s, tone.b)),
-        p.color(0, 0, 100),
-      ];
-      updateChromaInfo(picks);
+      const includeWhite = paletteMode !== "chroma2Only";
+      palette = picks.map(({ tone, hue }) => p.color(hue.h, tone.s, tone.b));
+      if (includeWhite) palette.push(p.color(0, 0, 100));
+      updateChromaInfo(picks, includeWhite);
     }
 
     // 各色の目標比率をランダムに決定(合計100%)。
@@ -700,11 +875,28 @@ export const colorGridSketch = (p: p5) => {
     // 配色パレットを使うのはランダム塗りと連結グラデーション。
     // 連結の指定は、連結グラデーションでは塗り方自体が決めるので効かない。
     const usesPalette = fillMode === "random" || fillMode === "blobGradient";
-    setRowEnabled(directionRow, fillMode === "gradient");
+    setRowEnabled(
+      directionRow,
+      fillMode === "gradient" || fillMode === "colorGradient",
+    );
     setRowEnabled(walkRow, fillMode === "serpentine");
-    setRowEnabled(hueShiftRow, fillMode === "serpentine");
+    setRowEnabled(serpentineChangeRow, fillMode === "serpentine");
+    // 色相変化は彩度の往復のときだけ意味を持つ
+    const serpentineColor =
+      fillMode === "serpentine" && serpentineChange === "colorStops";
+    setRowEnabled(
+      hueShiftRow,
+      fillMode === "serpentine" && serpentineChange === "saturation",
+    );
     setRowEnabled(paletteRow, usesPalette);
-    setRowEnabled(toneRow, usesPalette && paletteMode === "chroma2");
+    // トーンの同一/個別は有彩色2色の配色と、色グラデーションの中継色に効く
+    const twoChroma = paletteMode === "chroma2" || paletteMode === "chroma2Only";
+    setRowEnabled(
+      toneRow,
+      (usesPalette && twoChroma) ||
+        fillMode === "colorGradient" ||
+        serpentineColor,
+    );
     setRowEnabled(constraintRow, fillMode === "random");
   };
 
@@ -783,6 +975,7 @@ export const colorGridSketch = (p: p5) => {
       [
         { value: "random", label: "ランダム" },
         { value: "gradient", label: "縦グラデーション" },
+        { value: "colorGradient", label: "色グラデーション" },
         { value: "serpentine", label: "蛇行グラデーション" },
         { value: "blobGradient", label: "連結グラデーション" },
       ],
@@ -811,11 +1004,26 @@ export const colorGridSketch = (p: p5) => {
       "経路",
       [
         { value: "column", label: "列を往復" },
+        { value: "rowZigzag", label: "2行でジグザグ" },
         { value: "random", label: "ランダム" },
       ],
       () => walkMode,
       (value) => {
         walkMode = value;
+      },
+    );
+
+    serpentineChangeRow = addSegmentedRow<SerpentineChange>(
+      controls,
+      "変化",
+      [
+        { value: "saturation", label: "彩度の往復" },
+        { value: "colorStops", label: "色グラデーション" },
+      ],
+      () => serpentineChange,
+      (value) => {
+        serpentineChange = value;
+        refreshRowStates();
       },
     );
 
@@ -838,6 +1046,7 @@ export const colorGridSketch = (p: p5) => {
       [
         { value: "chroma1", label: "1色 + 白" },
         { value: "chroma2", label: "2色 + 白" },
+        { value: "chroma2Only", label: "2色" },
         { value: "gray2", label: "グレー2 + 白" },
         { value: "gray3", label: "グレー3 + 白" },
       ],
@@ -905,9 +1114,45 @@ export const colorGridSketch = (p: p5) => {
     generatePattern();
   };
 
+  // 保存ファイル名: color-grid-{グリッド数}-{有効なパラメータ...}-{時刻}
+  // 塗り方に効かない（UI で無効化されている）パラメータは含めない。
+  const saveFileName = () => {
+    const parts: string[] = ["color-grid", String(gridN), fillMode];
+
+    if (fillMode === "gradient" || fillMode === "colorGradient") {
+      parts.push(gradientDirection);
+    }
+    if (fillMode === "serpentine") {
+      parts.push(walkMode, serpentineChange);
+      if (serpentineChange === "saturation") parts.push(hueShift);
+    }
+
+    const usesPalette = fillMode === "random" || fillMode === "blobGradient";
+    if (usesPalette) parts.push(paletteMode);
+
+    const twoChroma =
+      paletteMode === "chroma2" || paletteMode === "chroma2Only";
+    const serpentineColor =
+      fillMode === "serpentine" && serpentineChange === "colorStops";
+    if (
+      (usesPalette && twoChroma) ||
+      fillMode === "colorGradient" ||
+      serpentineColor
+    ) {
+      parts.push(toneMode);
+    }
+
+    if (fillMode === "random") {
+      parts.push(constraintEnabled ? "constraint" : "noConstraint");
+    }
+
+    parts.push(String(Date.now()));
+    return parts.join("-");
+  };
+
   p.keyPressed = () => {
     if (p.key === "s" || p.key === "S") {
-      p.saveCanvas(`color-grid-${Date.now()}`, "png");
+      p.saveCanvas(saveFileName(), "png");
     }
   };
 };
