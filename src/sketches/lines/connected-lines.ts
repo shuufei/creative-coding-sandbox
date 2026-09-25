@@ -1,4 +1,5 @@
 import type p5 from "p5";
+import { saveHighRes, saveScales, type SaveScale } from "./high-res-save";
 
 /**
  * 線をランダムに描画する。
@@ -97,7 +98,9 @@ type Segment = {
 };
 
 export const connectedLinesSketch = (p: p5) => {
-  const size = 1000;
+  // canvas の1辺 (px)。設定パネルから 500 / 1000 を選べる
+  let size = 1000;
+  let panel: p5.Element | undefined;
 
   const settings = {
     // 描く本数
@@ -120,6 +123,8 @@ export const connectedLinesSketch = (p: p5) => {
     joint: "none" as JointMode,
     // 1秒あたりに描く本数。0 なら一度に全部描く
     speed: 60,
+    // PNG 保存するときの解像度の倍率
+    saveScale: 2 as SaveScale,
   };
 
   let segments: Segment[] = [];
@@ -440,6 +445,12 @@ export const connectedLinesSketch = (p: p5) => {
     }
   };
 
+  // いままでに描いた線を1枚まるごと描き直す (高解像度で保存するときに使う)
+  const redrawAll = () => {
+    p.background(255);
+    for (let i = 0; i < drawn; i++) drawSegment(segments[i]);
+  };
+
   // 再生成。canvas を白で塗り直して、1本目から描き始める
   const reseed = () => {
     buildSegments();
@@ -508,7 +519,7 @@ export const connectedLinesSketch = (p: p5) => {
     values.map((n) => [String(n), String(n)] as [string, string]);
 
   const buildUI = () => {
-    const panel = p.createDiv();
+    panel = p.createDiv();
     panel.style("width", `${size}px`);
     panel.style("box-sizing", "border-box");
     panel.style("padding", "20px 24px 28px");
@@ -517,6 +528,24 @@ export const connectedLinesSketch = (p: p5) => {
     panel.style("align-items", "flex-end");
     panel.style("flex-wrap", "wrap");
     panel.style("background", "#111");
+
+    addSelect<string>(
+      panel,
+      "キャンバス",
+      [
+        ["500 x 500", "500"],
+        ["1000 x 1000", "1000"],
+      ],
+      String(size),
+      (value) => {
+        size = Number(value);
+        // noRedraw = true。描き直しは reseed で1本目から行う
+        p.resizeCanvas(size, size, true);
+        panel?.style("width", `${size}px`);
+        applySaveLabel();
+        reseed();
+      },
+    );
 
     addSelect<string>(
       panel,
@@ -709,6 +738,23 @@ export const connectedLinesSketch = (p: p5) => {
       },
     );
 
+    const saveLabel = addSelect<string>(
+      panel,
+      "保存解像度",
+      saveScales.map((n) => [`${n}x`, String(n)] as [string, string]),
+      String(settings.saveScale),
+      (value) => {
+        settings.saveScale = Number(value) as SaveScale;
+        applySaveLabel();
+      },
+    ).label;
+    // 実際に保存される px を添える。canvas の大きさを変えたときも更新する
+    const applySaveLabel = () => {
+      const px = size * settings.saveScale;
+      saveLabel.html(`保存解像度 (${px} x ${px} px)`);
+    };
+    applySaveLabel();
+
     // 効かない設定は隠す / ラベルだけ変える
     const applyFields = () => {
       const usesTurn =
@@ -777,7 +823,12 @@ export const connectedLinesSketch = (p: p5) => {
 
   p.keyPressed = () => {
     if (p.key === "s" || p.key === "S") {
-      p.saveCanvas(`connected-lines-${settings.count}-${Date.now()}`, "png");
+      saveHighRes(
+        p,
+        `connected-lines-${settings.count}-${size * settings.saveScale}px-${Date.now()}`,
+        settings.saveScale,
+        redrawAll,
+      );
     }
   };
 };
