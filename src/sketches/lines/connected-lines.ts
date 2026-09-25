@@ -98,9 +98,7 @@ type Segment = {
 };
 
 export const connectedLinesSketch = (p: p5) => {
-  // canvas の1辺 (px)。設定パネルから 500 / 1000 を選べる
-  let size = 1000;
-  let panel: p5.Element | undefined;
+  const size = 1000;
 
   const settings = {
     // 描く本数
@@ -519,7 +517,7 @@ export const connectedLinesSketch = (p: p5) => {
     values.map((n) => [String(n), String(n)] as [string, string]);
 
   const buildUI = () => {
-    panel = p.createDiv();
+    const panel = p.createDiv();
     panel.style("width", `${size}px`);
     panel.style("box-sizing", "border-box");
     panel.style("padding", "20px 24px 28px");
@@ -528,24 +526,6 @@ export const connectedLinesSketch = (p: p5) => {
     panel.style("align-items", "flex-end");
     panel.style("flex-wrap", "wrap");
     panel.style("background", "#111");
-
-    addSelect<string>(
-      panel,
-      "キャンバス",
-      [
-        ["500 x 500", "500"],
-        ["1000 x 1000", "1000"],
-      ],
-      String(size),
-      (value) => {
-        size = Number(value);
-        // noRedraw = true。描き直しは reseed で1本目から行う
-        p.resizeCanvas(size, size, true);
-        panel?.style("width", `${size}px`);
-        applySaveLabel();
-        reseed();
-      },
-    );
 
     addSelect<string>(
       panel,
@@ -748,7 +728,7 @@ export const connectedLinesSketch = (p: p5) => {
         applySaveLabel();
       },
     ).label;
-    // 実際に保存される px を添える。canvas の大きさを変えたときも更新する
+    // 実際に保存される px を添える
     const applySaveLabel = () => {
       const px = size * settings.saveScale;
       saveLabel.html(`保存解像度 (${px} x ${px} px)`);
