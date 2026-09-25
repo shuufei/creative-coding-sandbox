@@ -1,4 +1,5 @@
 import type p5 from "p5";
+import { saveHighRes, saveScales, type SaveScale } from "./high-res-save";
 
 /**
  * 線的な表現の検証。
@@ -90,7 +91,9 @@ type SelectElement = p5.Element & {
 };
 
 export const lineGridSketch = (p: p5) => {
-  const size = 1000;
+  // canvas の1辺 (px)。設定パネルから 500 / 1000 を選べる
+  let size = 1000;
+  let panel: p5.Element | undefined;
 
   const settings = {
     // 1辺のマス数。canvas の大きさは変えずにマスを細かくする
@@ -116,6 +119,8 @@ export const lineGridSketch = (p: p5) => {
     lengthRatio: 0.6,
     weight: 2,
     trail: "none" as TrailMode,
+    // PNG 保存するときの解像度の倍率
+    saveScale: 2 as SaveScale,
   };
 
   // 描くたび (再生成のたび) に決まる、パターンの向きや位置
@@ -396,7 +401,8 @@ export const lineGridSketch = (p: p5) => {
     rebuildRandomBase();
   };
 
-  const drawFrame = () => {
+  // clear: 残像を使わずに白で塗りなおす (高解像度で保存するときの1枚描き)
+  const drawFrame = (clear = false) => {
     const n = settings.gridN;
     const count = settings.linesPerCell;
     const cellSize = size / n;
@@ -404,7 +410,7 @@ export const lineGridSketch = (p: p5) => {
     const t = time;
     const targets = targetPoints(t);
 
-    if (settings.motion === "none" || settings.trail === "none") {
+    if (clear || settings.motion === "none" || settings.trail === "none") {
       p.background(0, 0, 100);
     } else {
       // 半透明の白を重ねて、前のフレームを少しずつ消す = 残像
@@ -538,7 +544,7 @@ export const lineGridSketch = (p: p5) => {
     values.map((n) => [String(n), String(n)] as [string, string]);
 
   const buildUI = () => {
-    const panel = p.createDiv();
+    panel = p.createDiv();
     panel.style("width", `${size}px`);
     panel.style("box-sizing", "border-box");
     panel.style("padding", "20px 24px 28px");
@@ -547,6 +553,26 @@ export const lineGridSketch = (p: p5) => {
     panel.style("align-items", "flex-end");
     panel.style("flex-wrap", "wrap");
     panel.style("background", "#111");
+
+    addSelect<string>(
+      panel,
+      "キャンバス",
+      [
+        ["500 x 500", "500"],
+        ["1000 x 1000", "1000"],
+      ],
+      String(size),
+      (value) => {
+        size = Number(value);
+        // noRedraw = true。描き直しは光源を置き直してから行う
+        p.resizeCanvas(size, size, true);
+        panel?.style("width", `${size}px`);
+        // 点光源の位置は canvas の大きさから決まるので置き直す
+        placeLight();
+        applySaveLabel();
+        refresh();
+      },
+    );
 
     addSelect<string>(
       panel,
@@ -766,6 +792,23 @@ export const lineGridSketch = (p: p5) => {
       },
     ).field;
 
+    const saveLabel = addSelect<string>(
+      panel,
+      "保存解像度",
+      saveScales.map((n) => [`${n}x`, String(n)] as [string, string]),
+      String(settings.saveScale),
+      (value) => {
+        settings.saveScale = Number(value) as SaveScale;
+        applySaveLabel();
+      },
+    ).label;
+    // 実際に保存される px を添える。canvas の大きさを変えたときも更新する
+    const applySaveLabel = () => {
+      const px = size * settings.saveScale;
+      saveLabel.html(`保存解像度 (${px} x ${px} px)`);
+    };
+    applySaveLabel();
+
     // 効かない設定は隠す
     const applyFields = () => {
       const usesStep =
@@ -830,7 +873,13 @@ export const lineGridSketch = (p: p5) => {
   p.keyPressed = () => {
     if (p.key === " ") paused = !paused;
     if (p.key === "s" || p.key === "S") {
-      p.saveCanvas(`line-grid-${settings.gridN}-${Date.now()}`, "png");
+      // 残像は1枚描きでは再現できないので、保存する画像は残像なしの1フレームになる
+      saveHighRes(
+        p,
+        `line-grid-${settings.gridN}-${size * settings.saveScale}px-${Date.now()}`,
+        settings.saveScale,
+        () => drawFrame(true),
+      );
     }
   };
 };
